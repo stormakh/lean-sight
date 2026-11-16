@@ -162,6 +162,11 @@ async function doSeed() {
   const { spawnSync } = await import('node:child_process');
   const r = spawnSync('bash', [path.join(root, 'bench/seed.sh'), target], { encoding: 'utf8' });
   console.log(`seed: bench/seed.sh ${target} -> exit ${r.status}${(r.stdout + r.stderr).trim() ? ': ' + (r.stdout + r.stderr).trim() : ''}`);
+  // ui-tour-v1 was recorded on the instance of ui-tour (v2), which had saved dashboard gsshcd "Recorded save"
+  if (!files.some((f) => path.basename(f).startsWith('ui-tour'))) return;
+  const h = { authorization: 'Basic ' + Buffer.from('admin:admin').toString('base64'), 'content-type': 'application/json' };
+  const g = await call('POST', '/api/dashboards/db', h, JSON.stringify({ dashboard: { uid: 'gsshcd', title: 'Recorded save', panels: [], schemaVersion: 42 } }));
+  console.log(`seed: POST /api/dashboards/db (gsshcd) -> ${g.status} ${g.text.slice(0, 120)}`);
 }
 
 // ---- main ----

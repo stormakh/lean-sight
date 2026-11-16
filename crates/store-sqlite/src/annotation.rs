@@ -55,6 +55,10 @@ impl AnnotationStore for SqliteStore {
         let n = self.db(|c| c.execute("DELETE FROM annotation WHERE org_id = ?1 AND id = ?2", params![org_id, id]))?;
         if n == 0 { Err(StoreError::NotFound) } else { Ok(()) }
     }
+    fn annotations_delete(&self, org_id: i64, dashboard_uid: &str, panel_id: i64) -> SResult<i64> {
+        let n = self.db(|c| c.execute("DELETE FROM annotation WHERE org_id = ?1 AND dashboard_uid = ?2 AND panel_id = ?3", params![org_id, dashboard_uid, panel_id]))?;
+        Ok(n as i64)
+    }
     fn annotation_by_id(&self, org_id: i64, id: i64) -> SResult<Annotation> {
         self.db(|c| c.prepare_cached(concat!("SELECT ", cols!(), " FROM annotation WHERE org_id = ?1 AND id = ?2"))?.query_row(params![org_id, id], row))
     }

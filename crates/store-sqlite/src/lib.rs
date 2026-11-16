@@ -23,7 +23,7 @@ pub struct SqliteStore {
 }
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub(crate) fn map_err(e: rusqlite::Error) -> StoreError {
     match e {
