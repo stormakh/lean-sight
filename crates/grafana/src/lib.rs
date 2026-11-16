@@ -4,6 +4,7 @@ pub mod app;
 pub mod auth;
 pub mod ctx;
 pub mod error;
+pub mod promlib;
 pub mod secrets;
 pub mod seed;
 pub mod settings;
