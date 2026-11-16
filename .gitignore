@@ -4,3 +4,5 @@ target/
 *.db
 bench/run/
 upstream-prometheus/
+data/
+.lust-cache/
