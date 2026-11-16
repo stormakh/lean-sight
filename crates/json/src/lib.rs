@@ -219,7 +219,8 @@ impl Json {
 /// Parses `b`. `t` is the same text as a str when it is valid UTF-8, or "" when it is not.
 fn parse_text(b: &[u8], t: &str) -> Result<Json, JsonError> {
     let mut p = 0;
-    let v = parse_value(b, t, &mut p, 0)?;
+    let mut st = Stacks { arr: Vec::new(), obj: Vec::new() };
+    let v = parse_value(b, t, &mut p, 0, &mut st)?;
     skip_ws(b, &mut p);
     if p != b.len() {
         return Err(JsonError { msg: "trailing data after JSON value", offset: p });
@@ -569,7 +570,14 @@ fn skip_ws(b: &[u8], p: &mut usize) {
         *p += 1;
     }
 }
-fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize) -> Result<Json, JsonError> {
+/// Items of the arrays and objects being parsed. Each container takes its items off the top when it ends, into a
+/// Vec of the exact size, so containers do not grow (and reallocate) item by item.
+struct Stacks {
+    arr: Vec<Json>,
+    obj: Vec<(String, Json)>,
+}
+
+fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize, st: &mut Stacks) -> Result<Json, JsonError> {
     if depth > MAX_DEPTH {
         return Err(err("JSON nested too deep", *p));
     }
@@ -580,12 +588,12 @@ fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize) -> Result<Json, J
     match b[*p] {
         b'{' => {
             *p += 1;
-            let mut o: Vec<(String, Json)> = Vec::new();
             skip_ws(b, p);
             if *p < b.len() && b[*p] == b'}' {
                 *p += 1;
-                return Ok(Json::Obj(o));
+                return Ok(Json::Obj(Vec::new()));
             }
+            let base = st.obj.len();
             loop {
                 skip_ws(b, p);
                 let k = parse_str(b, t, p)?;
@@ -594,18 +602,11 @@ fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize) -> Result<Json, J
                     return Err(err("expected ':' after object key", *p));
                 }
                 *p += 1;
-                let v = parse_value(b, t, p, depth + 1)?;
+                let v = parse_value(b, t, p, depth + 1, st)?;
                 // A repeated key keeps its first position and takes the last value.
-                let mut found = false;
-                for e in o.iter_mut() {
-                    if e.0 == k {
-                        e.1 = v.clone();
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    o.push((k, v));
+                match st.obj[base..].iter().position(|e| e.0 == k) {
+                    Some(j) => st.obj[base + j].1 = v,
+                    None => st.obj.push((k, v)),
                 }
                 skip_ws(b, p);
                 if *p < b.len() && b[*p] == b',' {
@@ -614,6 +615,7 @@ fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize) -> Result<Json, J
                 }
                 if *p < b.len() && b[*p] == b'}' {
                     *p += 1;
+                    let o: Vec<(String, Json)> = st.obj.drain(base..).collect();
                     return Ok(Json::Obj(o));
                 }
                 return Err(err("expected ',' or '}' in object", *p));
@@ -621,14 +623,15 @@ fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize) -> Result<Json, J
         }
         b'[' => {
             *p += 1;
-            let mut a = Vec::new();
             skip_ws(b, p);
             if *p < b.len() && b[*p] == b']' {
                 *p += 1;
-                return Ok(Json::Arr(a));
+                return Ok(Json::Arr(Vec::new()));
             }
+            let base = st.arr.len();
             loop {
-                a.push(parse_value(b, t, p, depth + 1)?);
+                let v = parse_value(b, t, p, depth + 1, st)?;
+                st.arr.push(v);
                 skip_ws(b, p);
                 if *p < b.len() && b[*p] == b',' {
                     *p += 1;
@@ -636,6 +639,7 @@ fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize) -> Result<Json, J
                 }
                 if *p < b.len() && b[*p] == b']' {
                     *p += 1;
+                    let a: Vec<Json> = st.arr.drain(base..).collect();
                     return Ok(Json::Arr(a));
                 }
                 return Err(err("expected ',' or ']' in array", *p));
