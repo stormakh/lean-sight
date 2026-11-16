@@ -124,7 +124,7 @@ impl Bits<'_> {
 // ---------------- symbols ----------------
 
 // A symbol is a literal byte (dist 0) or a match: `dist << 9 | len`, len 3..=258, dist 1..=32768.
-const BLOCK_SYMS: usize = 16 * 1024;
+const BLOCK_SYMS: usize = 8 * 1024;
 const WINDOW: usize = 32 * 1024;
 const MAX_MATCH: usize = 258;
 const MIN_MATCH: usize = 4;
@@ -201,19 +201,21 @@ fn deflate(data: &[u8], out: &mut Vec<u8>) {
         w.align();
         return;
     }
-    // hash table of the last position for each 4-byte hash, sized to the input
+    // Hash table of the last position (its low 16 bits) for each 4-byte hash, sized to the input. A stale or
+    // wrapped entry only points at some earlier position less than 64 KB back; the bytes are compared before use.
     let lg = (usize::BITS - n.leading_zeros()) as usize;
-    let bits = lg.saturating_sub(3).clamp(9, 15);
-    let mut table = vec![0u32; 1 << bits];
+    let bits = lg.saturating_sub(3).clamp(9, 14);
+    let mut table = vec![0u16; 1 << bits];
     let shift = 32 - bits as u32;
     let mut i = 0;
     let mut miss = 0u32;
     while i + MIN_MATCH <= n {
         let x = read4(data, i);
         let h = (x.wrapping_mul(0x9E37_79B1) >> shift) as usize;
-        let cand = table[h] as usize;
-        table[h] = i as u32;
-        if cand < i && i - cand <= WINDOW && read4(data, cand) == x {
+        let back = (i as u16).wrapping_sub(table[h]) as usize;
+        table[h] = i as u16;
+        let cand = i.wrapping_sub(back);
+        if back > 0 && back <= WINDOW && back <= i && read4(data, cand) == x {
             let max = if n - i < MAX_MATCH { n - i } else { MAX_MATCH };
             let mut l = MIN_MATCH;
             while l + 8 <= max {
@@ -234,7 +236,7 @@ fn deflate(data: &[u8], out: &mut Vec<u8>) {
             let e = i + l - 1;
             if e + MIN_MATCH <= n && l > MIN_MATCH {
                 let he = (read4(data, e).wrapping_mul(0x9E37_79B1) >> shift) as usize;
-                table[he] = e as u32;
+                table[he] = e as u16;
             }
             i += l;
             miss = 0;
