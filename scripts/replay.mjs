@@ -1,6 +1,7 @@
 // Replay scorer: replays recorded UI traffic against a server and compares each response with the recording.
 //
-// usage: node scripts/replay.mjs [--target http://localhost:3400] [--seed] [--verbose] [--only <substring>] [file.jsonl ...]
+// usage: node scripts/replay.mjs [--target http://localhost:3400] [--seed] [--prom <url>] [--verbose] [--only <substring>] [file.jsonl ...]
+//   --prom: the URL of the seeded data source (default http://localhost:9390; a fixture Prometheus for exact frames).
 //   default file: tests-data/recordings/ui-tour-v1.jsonl. Several files replay in the order given, sharing ids and cookies.
 //
 // The recordings were made with anonymous Admin access (bench/grafana.sh capture-v1), so start the target the same way:
@@ -25,7 +26,7 @@ import path from 'node:path';
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const args = process.argv.slice(2);
 let target = 'http://localhost:3400';
-let seed = false, verbose = false, only = '';
+let seed = false, verbose = false, only = '', promUrl = 'http://localhost:9390';
 const files = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -33,6 +34,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--seed') seed = true;
   else if (a === '--verbose' || a === '-v') verbose = true;
   else if (a === '--only') only = args[++i];
+  else if (a === '--prom') promUrl = args[++i];
   else files.push(a);
 }
 if (!files.length) files.push(path.join(root, 'tests-data/recordings/ui-tour-v1.jsonl'));
@@ -160,7 +162,7 @@ async function call(method, url, headers, body) {
 // Seeds the target exactly as the recordings were seeded: bench/seed.sh (prom1 and bench1, as admin:admin).
 async function doSeed() {
   const { spawnSync } = await import('node:child_process');
-  const r = spawnSync('bash', [path.join(root, 'bench/seed.sh'), target], { encoding: 'utf8' });
+  const r = spawnSync('bash', [path.join(root, 'bench/seed.sh'), target, promUrl], { encoding: 'utf8' });
   console.log(`seed: bench/seed.sh ${target} -> exit ${r.status}${(r.stdout + r.stderr).trim() ? ': ' + (r.stdout + r.stderr).trim() : ''}`);
   // ui-tour-v1 was recorded on the instance of ui-tour (v2), which had saved dashboard gsshcd "Recorded save"
   if (!files.some((f) => path.basename(f).startsWith('ui-tour'))) return;

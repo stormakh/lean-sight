@@ -7,6 +7,7 @@ pub mod ctx;
 pub mod dashboard_migrate;
 pub mod error;
 pub mod k8s;
+pub mod promlib;
 pub mod secrets;
 pub mod plugins;
 pub mod seed;
