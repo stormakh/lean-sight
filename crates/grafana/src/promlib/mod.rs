@@ -76,8 +76,9 @@ pub struct ResourceResponse {
     pub body: Vec<u8>,
 }
 
-/// `Resource.Execute` for a path that is not `suggestions`.
-pub fn call_resource(inst: &Instance, method: &str, path: &str, raw_query: &str, body: &[u8], t: Transport<'_>) -> Result<ResourceResponse, String> {
+/// `Resource.Execute` for a path that is not `suggestions`. `cache` is the caller's `X-Grafana-Cache` header:
+/// when set, the answer carries `X-Grafana-Cache: y` and `Cache-Control: <cache>`.
+pub fn call_resource(inst: &Instance, method: &str, path: &str, raw_query: &str, body: &[u8], cache: Option<&str>, t: Transport<'_>) -> Result<ResourceResponse, String> {
     if !is_allowed_resource_path(path) {
         return Ok(ResourceResponse {
             status: 403,
@@ -94,7 +95,14 @@ pub fn call_resource(inst: &Instance, method: &str, path: &str, raw_query: &str,
     for (k, v) in res.headers {
         match k.as_str() {
             "content-encoding" | "content-length" | "transfer-encoding" | "connection" | "keep-alive" | "date" => {}
+            "x-grafana-cache" | "cache-control" if cache.map(|c| !c.is_empty()).unwrap_or(false) => {}
             _ => headers.push((k, v)),
+        }
+    }
+    if let Some(c) = cache {
+        if !c.is_empty() {
+            headers.push(("X-Grafana-Cache".to_string(), "y".to_string()));
+            headers.push(("Cache-Control".to_string(), c.to_string()));
         }
     }
     Ok(ResourceResponse { status: res.status, headers, body: res.body })

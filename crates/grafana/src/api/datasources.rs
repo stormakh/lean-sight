@@ -639,7 +639,8 @@ fn resource_by_uid(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     let to = inst.timeout_secs;
     let t = |r: &HttpReq| send(app, r, to);
     let body = std::mem::take(&mut c.req.body);
-    match promlib::call_resource(&inst, &c.req.method, &path, &c.req.query, &body, &t) {
+    let cache = c.req.header("x-grafana-cache").map(|v| v.to_string());
+    match promlib::call_resource(&inst, &c.req.method, &path, &c.req.query, &body, cache.as_deref(), &t) {
         Ok(r) => {
             let mut resp = Response::new(r.status);
             resp.body = http::Body::Bytes(r.body);
