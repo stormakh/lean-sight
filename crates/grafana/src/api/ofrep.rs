@@ -25,6 +25,13 @@ struct Flags {
     all: String,
     /// (key, single-flag body)
     one: Vec<(String, String)>,
+    /// Keys of the flags whose value is `true` (boot data `featureToggles`).
+    enabled: Vec<String>,
+}
+
+/// The flags that evaluate to `true`, in flag order (boot data `settings.featureToggles`).
+pub fn enabled_flags(cfg: &Settings) -> &'static [String] {
+    &flags(cfg).enabled
 }
 
 fn flags(cfg: &Settings) -> &'static Flags {
@@ -109,7 +116,11 @@ fn build(cfg: &Settings) -> Flags {
 
     let mut all = Json::arr();
     let mut one = Vec::with_capacity(list.len());
+    let mut enabled = Vec::new();
     for (k, v) in list {
+        if v == Json::Bool(true) {
+            enabled.push(k.clone());
+        }
         let f = Json::obj().with("key", k.as_str()).with("value", v).with("reason", REASON).with("variant", "default");
         let mut s = f.stringify();
         s.push('\n');
@@ -118,7 +129,7 @@ fn build(cfg: &Settings) -> Flags {
     }
     let mut all_s = Json::obj().with("flags", all).stringify();
     all_s.push('\n');
-    Flags { all: all_s, one }
+    Flags { all: all_s, one, enabled }
 }
 
 fn all_flags(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
