@@ -30,8 +30,8 @@ fn mw_err(status: u16, message_id: &str, message: &str) -> ApiError {
 }
 
 /// Cache of recent successful basic-auth checks, so a client that sends basic auth on every request pays the
-/// 10000-round PBKDF2 once per minute, not per request. Keyed by a MAC of the credentials (with a random key made at
-/// startup; no password is kept); a hit is valid only while the user's stored password hash is unchanged.
+/// 10000-round PBKDF2 once per minute, not per request. Keyed by a keyed hash of the credentials (with a random key
+/// made at startup; no password is kept); a hit is valid only while the user's stored password hash is unchanged.
 /// Concurrent misses for the same credentials run one PBKDF2: the others wait for its result (when an entry expires
 /// under load, 16 clients would otherwise each pay the full hash at the same moment).
 pub struct BasicCache {
@@ -39,18 +39,24 @@ pub struct BasicCache {
     /// Keys whose password check runs now.
     checking: Mutex<Vec<[u8; 32]>>,
     checked: Condvar,
-    key: crypto::HmacSha256,
+    key: [u8; 16],
 }
 const BASIC_CACHE_TTL: Duration = Duration::from_secs(60);
 const BASIC_CACHE_MAX: usize = 1024;
 impl BasicCache {
     pub fn new() -> BasicCache {
-        let mut k = [0u8; 32];
-        crypto::random_bytes(&mut k);
-        BasicCache { map: Mutex::new(HashMap::new()), checking: Mutex::new(Vec::new()), checked: Condvar::new(), key: crypto::HmacSha256::new(&k) }
+        let mut key = [0u8; 16];
+        crypto::random_bytes(&mut key);
+        BasicCache { map: Mutex::new(HashMap::new()), checking: Mutex::new(Vec::new()), checked: Condvar::new(), key }
     }
+    /// SHA-256 of the random key, the login, a 0 byte and the password: one compression for short credentials (the
+    /// HMAC it replaces needed two). The digest is only compared for equality with digests of credentials that
+    /// passed the PBKDF2 check, so a hit needs a SHA-256 collision; length extension gives nothing here, because
+    /// an extended message is a credential whose digest was never stored. The key keeps the stored digests from
+    /// being checked against password lists without it.
     fn cache_key(&self, login: &str, password: &str) -> [u8; 32] {
-        let mut s = self.key.start();
+        let mut s = crypto::Sha256::new();
+        s.update(&self.key);
         s.update(login.as_bytes());
         s.update(&[0]);
         s.update(password.as_bytes());
