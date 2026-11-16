@@ -198,7 +198,13 @@ fn series<'a>(q: &Query, ref_id: &str, rt: &'static str, idx: usize, it: &mut It
                     sample(it, &mut n, out, s)?;
                 } else {
                     while it.read_array()? {
-                        sample(it, &mut n, out, s)?;
+                        match compact_sample(it.bytes(), it.pos, n, out, &mut s.vals) {
+                            Some(p) => {
+                                it.pos = p;
+                                n += 1;
+                            }
+                            None => sample(it, &mut n, out, s)?,
+                        }
                     }
                 }
             }
@@ -211,6 +217,77 @@ fn series<'a>(q: &Query, ref_id: &str, rt: &'static str, idx: usize, it: &mut It
     }
     finish(out, s);
     Ok(Out::Done)
+}
+
+/// The common sample form `[1700000000,"1.5"]` (whole seconds, a value in Go's JSON float form, no spaces),
+/// read and written in one scan. None (nothing written) for any other form: `sample` handles it.
+fn compact_sample(b: &[u8], start: usize, n: usize, out: &mut String, vals: &mut String) -> Option<usize> {
+    let mut i = start;
+    if *b.get(i)? != b'[' {
+        return None;
+    }
+    i += 1;
+    let ts = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let tl = i - ts;
+    if tl == 0 || tl > 10 || (tl == 10 && b[ts] >= b'9') || *b.get(i)? != b',' || *b.get(i + 1)? != b'"' {
+        return None;
+    }
+    i += 2;
+    let vs = i;
+    if *b.get(i)? == b'-' {
+        i += 1;
+    }
+    let int_start = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let int_len = i - int_start;
+    if int_len == 0 || int_len > 17 || (int_len > 1 && b[int_start] == b'0') {
+        return None;
+    }
+    let int_zero = int_len == 1 && b[int_start] == b'0';
+    let mut sig = if int_zero { 0 } else { int_len };
+    if *b.get(i)? == b'.' {
+        i += 1;
+        let fs = i;
+        let mut z = 0;
+        if int_zero {
+            while i < b.len() && b[i] == b'0' {
+                i += 1;
+            }
+            z = i - fs;
+            if z > 5 {
+                return None; // below 1e-6: Go writes an exponent
+            }
+        }
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == fs + z || b[i - 1] == b'0' {
+            return None;
+        }
+        sig += i - fs - z;
+    }
+    if sig > 17 || *b.get(i)? != b'"' || *b.get(i + 1)? != b']' {
+        return None;
+    }
+    let tok = std::str::from_utf8(&b[ts..ts + tl]).ok()?;
+    let val = std::str::from_utf8(&b[vs..i]).ok()?;
+    if n > 0 {
+        out.push(',');
+        vals.push(',');
+    }
+    if tok == "0" {
+        out.push('0');
+    } else {
+        out.push_str(tok);
+        out.push_str("000");
+    }
+    vals.push_str(val);
+    Some(i + 2)
 }
 
 /// One `[time, "value"]`: the time goes to `out`, the value to `s.vals`.
