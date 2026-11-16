@@ -11,7 +11,7 @@ use crate::app::App;
 use crate::ctx::{Access, Ctx, Role, Routes, SignedInUser};
 use crate::error::ApiError;
 use crate::store::{Preferences, StoreError, User};
-use crate::util::{now, rfc3339};
+use crate::util::{local_rfc3339, now, rfc3339};
 use http::Response;
 use json::Json;
 
@@ -164,7 +164,7 @@ pub fn age_string(t: i64) -> String {
 
 /// Go's zero time for a never-seen user.
 fn time_or_zero(t: i64) -> String {
-    if t <= 0 { "0001-01-01T00:00:00Z".to_string() } else { rfc3339(t) }
+    if t <= 0 { "0001-01-01T00:00:00Z".to_string() } else { local_rfc3339(t) }
 }
 
 /// The user by `:id` (a number or a uid, as upstream's userUIDResolver allows).
@@ -192,8 +192,8 @@ fn user_profile(app: &App, u: &User, org_id: i64) -> Json {
         .with("isExternallySynced", false)
         .with("isGrafanaAdminExternallySynced", false)
         .with("authLabels", Json::arr())
-        .with("updatedAt", rfc3339(u.updated))
-        .with("createdAt", rfc3339(u.created))
+        .with("updatedAt", local_rfc3339(u.updated))
+        .with("createdAt", local_rfc3339(u.created))
         .with("avatarUrl", gravatar_url(&app.cfg, &u.email))
         .with("isProvisioned", u.is_provisioned)
 }
@@ -386,8 +386,8 @@ fn tokens_json(c: &Ctx<'_>, user_id: i64, current_session: i64) -> Result<Respon
                 .with("os", "Other")
                 .with("osVersion", "")
                 .with("device", "Other")
-                .with("createdAt", rfc3339(t.created_at))
-                .with("seenAt", rfc3339(if t.seen_at > 0 { t.seen_at } else { t.created_at }))
+                .with("createdAt", local_rfc3339(t.created_at))
+                .with("seenAt", local_rfc3339(if t.seen_at > 0 { t.seen_at } else { t.created_at }))
                 .with("authModule", ""),
         );
     }
@@ -949,7 +949,7 @@ fn search_hit(app: &App, u: &User) -> Json {
         .with("lastSeenAt", time_or_zero(u.last_seen_at))
         .with("lastSeenAtAge", age_string(u.last_seen_at))
         .with("authLabels", Json::arr())
-        .with("created", rfc3339(u.created))
+        .with("created", local_rfc3339(u.created))
 }
 
 fn page_params(c: &Ctx<'_>, default_per_page: i64) -> (String, i64, i64) {
@@ -1189,7 +1189,7 @@ fn org_user_json(app: &App, m: &crate::store::OrgMember, uid: &str, disabled: bo
         .with("login", m.login.as_str())
         .with("role", m.role.as_str())
         .with("lastSeenAt", time_or_zero(m.last_seen_at))
-        .with("created", rfc3339(m.created))
+        .with("created", local_rfc3339(m.created))
         .with("lastSeenAtAge", age_string(m.last_seen_at))
         .with("isDisabled", disabled)
         .with("authLabels", Json::Null)
