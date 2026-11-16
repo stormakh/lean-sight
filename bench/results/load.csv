@@ -11,3 +11,7 @@ grafana-rs,health,86202,0.03,5,0.51
 grafana-rs,search,6472,0.274,6,7.11
 grafana-rs,dashboard,13091,0.236,6,2.66
 grafana-rs,ds_query,2088,0.82,6,17.7
+grafana-rs-final,health,114776,0.034,5,0.34
+grafana-rs-final,search,6828,0.264,6,6.59
+grafana-rs-final,dashboard,12214,0.262,6,2.85
+grafana-rs-final,ds_query,2281,0.852,6,15.82
