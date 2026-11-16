@@ -386,7 +386,9 @@ fn token_auth(app: &App, tok: &str, org_req: i64) -> AuthResult {
     if key.service_account_id > 0 {
         let uo = match app.store.user_in_org(key.service_account_id, key.org_id) {
             Ok(u) => u,
-            Err(_) => return invalid(),
+            Err(StoreError::NotFound) => return invalid(),
+            // a database failure is a server error, not bad credentials (as the separate lookups answered)
+            Err(_) => return AuthResult::Failed(ApiError::internal("")),
         };
         if uo.is_disabled {
             return AuthResult::Failed(mw_err(401, "identity.disabled", ""));
@@ -441,7 +443,8 @@ fn session_auth(app: &App, raw: &str, org_req: i64, req: &Request) -> AuthResult
     let _ = req;
     let uo = match app.store.user_in_org(tok.user_id, org_req) {
         Ok(u) => u,
-        Err(_) => return not_found(),
+        Err(StoreError::NotFound) => return not_found(),
+        Err(_) => return AuthResult::Failed(ApiError::internal("")),
     };
     match finish_user_in_org(app, uo, AuthMethod::Session) {
         AuthResult::Ok(mut id) => {
