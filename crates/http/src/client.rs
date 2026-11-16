@@ -99,9 +99,10 @@ pub fn parse_url(url: &str) -> Result<Url, ClientError> {
     Ok(Url { host: host.to_string(), port, path })
 }
 
+/// An idle keep-alive connection. No read buffer is kept while idle: a reused connection gets a new one.
 struct Idle {
     key: String,
-    conn: BufReader<TcpStream>,
+    conn: TcpStream,
     since: Instant,
 }
 
@@ -129,7 +130,8 @@ fn io_err(e: std::io::Error) -> ClientError {
 
 impl Client {
     pub fn new() -> Client {
-        Client { idle: Mutex::new(Vec::new()), max_idle: 8, idle_ttl: Duration::from_secs(30), max_body_bytes: 256 * 1024 * 1024 }
+        // Grafana's defaults: [dataproxy] max_idle_connections = 100, idle_conn_timeout_seconds = 90
+        Client { idle: Mutex::new(Vec::new()), max_idle: 100, idle_ttl: Duration::from_secs(90), max_body_bytes: 256 * 1024 * 1024 }
     }
 
     /// Drops every idle connection (for example when idle memory matters).
@@ -139,7 +141,7 @@ impl Client {
         }
     }
 
-    fn take_idle(&self, key: &str) -> Option<BufReader<TcpStream>> {
+    fn take_idle(&self, key: &str) -> Option<TcpStream> {
         let mut v = match self.idle.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -157,7 +159,7 @@ impl Client {
             None => None,
         }
     }
-    fn put_idle(&self, key: String, conn: BufReader<TcpStream>) {
+    fn put_idle(&self, key: String, conn: TcpStream) {
         let mut v = match self.idle.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -187,15 +189,16 @@ impl Client {
             }
         }
         let conn = connect(&u, deadline)?;
-        let (resp, keep) = self.exchange(BufReader::with_capacity(16 * 1024, conn), &u, method, headers, body, deadline)?;
+        let (resp, keep) = self.exchange(conn, &u, method, headers, body, deadline)?;
         if let Some(c) = keep {
             self.put_idle(key, c);
         }
         Ok(resp)
     }
 
-    fn exchange(&self, mut r: BufReader<TcpStream>, u: &Url, method: &str, headers: &[(&str, &str)], body: &[u8], deadline: Instant) -> Result<(ClientResponse, Option<BufReader<TcpStream>>), ClientError> {
-        set_deadline(r.get_ref(), deadline)?;
+    fn exchange(&self, conn: TcpStream, u: &Url, method: &str, headers: &[(&str, &str)], body: &[u8], deadline: Instant) -> Result<(ClientResponse, Option<TcpStream>), ClientError> {
+        set_deadline(&conn, deadline)?;
+        let mut r = BufReader::with_capacity(4 * 1024, conn);
         let mut h = String::with_capacity(256);
         h.push_str(method);
         h.push(' ');
@@ -302,7 +305,11 @@ impl Client {
                 resp.body = out;
                 resp.headers.retain(|h| h.0 != "content-encoding");
             }
-            return Ok((resp, if reusable { Some(r) } else { None }));
+            // bytes after the response (none in HTTP/1.1 without pipelining) would corrupt the next exchange
+            if !r.buffer().is_empty() {
+                reusable = false;
+            }
+            return Ok((resp, if reusable { Some(r.into_inner()) } else { None }));
         }
     }
 }

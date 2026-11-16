@@ -16,6 +16,8 @@ pub enum Kind {
 
 pub struct Iter<'a> {
     b: &'a [u8],
+    /// The input as text when the caller checked it is UTF-8: strings are then sliced, not checked again.
+    text: Option<&'a str>,
     pub pos: usize,
     /// Nesting depth of `skip` / `read_any`, bounded so a hostile answer cannot overflow the 64 KB thread stack.
     depth: u32,
@@ -27,7 +29,12 @@ pub type R<T> = Result<T, String>;
 
 impl<'a> Iter<'a> {
     pub fn new(b: &'a [u8]) -> Iter<'a> {
-        Iter { b, pos: 0, depth: 0 }
+        Iter { b, text: None, pos: 0, depth: 0 }
+    }
+
+    /// An iterator over text already known to be UTF-8.
+    pub fn new_str(t: &'a str) -> Iter<'a> {
+        Iter { b: t.as_bytes(), text: Some(t), pos: 0, depth: 0 }
     }
 
     fn ws(&mut self) {
@@ -198,6 +205,10 @@ impl<'a> Iter<'a> {
         let (s, e, escaped) = self.string_span()?;
         if escaped {
             return Ok(None);
+        }
+        // the span starts after a '"' and ends at one, so it is on character boundaries
+        if let Some(t) = self.text {
+            return Ok(t.get(s..e));
         }
         let b: &'a [u8] = self.b;
         match std::str::from_utf8(&b[s..e]) {

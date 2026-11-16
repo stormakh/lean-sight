@@ -106,7 +106,7 @@ fn convert(q: &Query, res: Result<HttpResp, TransportError>, qt: QueryType) -> D
 
 /// A query result: already written JSON (the fast path) or a response for the general writer.
 pub enum Rendered {
-    Json(String),
+    Json(Vec<u8>),
     Resp(DataResponse),
 }
 
@@ -143,8 +143,8 @@ pub fn execute_rendered(inst: &Instance, queries: &[DataQuery], t: Transport<'_>
 fn render(q: &Query, ref_id: &str, answers: Vec<(QueryType, Result<HttpResp, TransportError>)>) -> Rendered {
     if answers.iter().all(|a| a.1.is_ok()) {
         let size: usize = answers.iter().map(|a| a.1.as_ref().map(|r| r.body.len()).unwrap_or(0)).sum();
-        let mut s = String::with_capacity(size + size / 2 + 64);
-        s.push_str("{\"status\":200,\"frames\":[");
+        let mut s: Vec<u8> = Vec::with_capacity(size + size / 2 + 64);
+        s.extend_from_slice(b"{\"status\":200,\"frames\":[");
         let mut first = true;
         let mut scratch = super::fast::Scratch::default();
         let mut ok = true;
@@ -157,7 +157,7 @@ fn render(q: &Query, ref_id: &str, answers: Vec<(QueryType, Result<HttpResp, Tra
             }
         }
         if ok {
-            s.push_str("]}");
+            s.extend_from_slice(b"]}");
             return Rendered::Json(s);
         }
     }
@@ -379,6 +379,11 @@ fn metric_name_from_labels(f: &Field) -> String {
 /// Go `%q` (strconv.Quote) of a label value.
 pub fn go_quote_q(v: &str, out: &mut String) {
     out.push('"');
+    if !v.bytes().any(|c| c < 0x20 || c == b'"' || c == b'\\' || c == 0x7f) {
+        out.push_str(v);
+        out.push('"');
+        return;
+    }
     for c in v.chars() {
         match c {
             '"' => out.push_str("\\\""),

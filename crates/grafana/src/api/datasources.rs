@@ -845,9 +845,9 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
             json::write_str(ref_id, &mut prefix);
             prefix.push(':');
             if let Some((_, Rendered::Json(mut j))) = results.pop() {
-                j.insert_str(0, &prefix);
-                j.push_str("}}\n");
-                return Ok(Response::json_text(status, j));
+                j.splice(0..0, prefix.bytes());
+                j.extend_from_slice(b"}}\n");
+                return Ok(Response::text(status, "application/json", j));
             }
         }
     }
@@ -861,7 +861,7 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         json::write_str(ref_id, &mut out);
         out.push(':');
         match r {
-            Rendered::Json(j) => out.push_str(j),
+            Rendered::Json(j) => out.push_str(&String::from_utf8_lossy(j)),
             Rendered::Resp(r) => r.write_json(&mut out),
         }
     }

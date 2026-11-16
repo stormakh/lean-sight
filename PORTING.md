@@ -107,7 +107,7 @@ target/release/grafana-rs                             # anonymous off: mode of a
   `with_header`, `set_header`, `set_cookie(&Cookie)`. `Router<T>`: patterns `/api/dashboards/uid/:uid`, `/public/*`,
   `/api/datasources/uid/:uid/resources/*rest`; the most literal segments win; HEAD matches GET. `Server` (thread per
   connection, 64 KB stack, 256 connections, 30 s keep-alive idle, 64 KB headers, 32 MB body, chunked bodies,
-  `Expect: 100-continue`, gzip >= 1400 bytes for compressible types). `Client` (plain http, pool of 8 idle
+  `Expect: 100-continue`, gzip >= 1400 bytes for compressible types). `Client` (plain http, pool of 100 idle
   keep-alive connections, deadline per request): `app.client.request("POST", url, &[("Content-Type", "...")], body,
   Duration)` -> `ClientResponse { status, headers, body }`. `staticfile::serve(req, root, rel, cache_control)`.
   `util::{url_encode, url_decode, parse_query, http_date, parse_http_date, now_unix, civil_from_days}`.
