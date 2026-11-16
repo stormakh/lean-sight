@@ -40,26 +40,49 @@ impl UserStore for SqliteStore {
         self.db(|c| c.prepare_cached(concat!("SELECT ", cols!(), " FROM user WHERE id = ?1"))?.query_row(params![id], row))
     }
     fn user_in_org(&self, id: i64, org_id: i64) -> SResult<UserInOrg> {
-        let (user, req_role, req_name, cur_role, cur_name) = self.db(|c| {
+        let (mut u, cur_org, req_role, req_name, cur_role, cur_name) = self.db(|c| {
             c.prepare_cached(concat!(
-                "SELECT ",
-                cols!(),
+                "SELECT id, uid, login, email, name, password, theme, help_flags1, is_admin, is_disabled, is_service_account, last_seen_at, org_id,",
                 // the requested org's subqueries run only when another org is asked for
-                ", CASE WHEN ?2 > 0 AND ?2 <> u.org_id THEN (SELECT role FROM org_user WHERE org_id = ?2 AND user_id = u.id) END,",
+                " CASE WHEN ?2 > 0 AND ?2 <> u.org_id THEN (SELECT role FROM org_user WHERE org_id = ?2 AND user_id = u.id) END,",
                 " CASE WHEN ?2 > 0 AND ?2 <> u.org_id THEN (SELECT name FROM org WHERE id = ?2) END,",
                 " (SELECT role FROM org_user WHERE org_id = u.org_id AND user_id = u.id),",
                 " (SELECT name FROM org WHERE id = u.org_id)",
                 " FROM user u WHERE id = ?1"
             ))?
             .query_row(params![id, org_id], |r| {
-                Ok((row(r)?, r.get::<_, Option<String>>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?))
+                let u = UserInOrg {
+                    id: r.get(0)?,
+                    uid: r.get(1)?,
+                    login: r.get(2)?,
+                    email: r.get(3)?,
+                    name: r.get(4)?,
+                    password: r.get(5)?,
+                    theme: r.get(6)?,
+                    help_flags1: r.get(7)?,
+                    is_admin: r.get(8)?,
+                    is_disabled: r.get(9)?,
+                    is_service_account: r.get(10)?,
+                    last_seen_at: r.get(11)?,
+                    ..UserInOrg::default()
+                };
+                Ok((u, r.get::<_, i64>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?))
             })
         })?;
         let role = |s: Option<String>| s.and_then(|s| Role::parse(&s)).unwrap_or(Role::None);
-        Ok(match req_role {
-            Some(r) => UserInOrg { user, org_id, role: role(Some(r)), org_name: req_name.unwrap_or_default() },
-            None => UserInOrg { org_id: user.org_id, user, role: role(cur_role), org_name: cur_name.unwrap_or_default() },
-        })
+        match req_role {
+            Some(r) => {
+                u.org_id = org_id;
+                u.role = role(Some(r));
+                u.org_name = req_name.unwrap_or_default();
+            }
+            None => {
+                u.org_id = cur_org;
+                u.role = role(cur_role);
+                u.org_name = cur_name.unwrap_or_default();
+            }
+        }
+        Ok(u)
     }
     fn user_display_login(&self, id: i64) -> SResult<String> {
         self.db(|c| c.prepare_cached("SELECT CASE WHEN is_service_account THEN name ELSE login END FROM user WHERE id = ?1")?.query_row(params![id], |r| r.get(0)))

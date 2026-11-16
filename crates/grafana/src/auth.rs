@@ -155,18 +155,34 @@ pub fn identity_for_user(app: &App, u: &User, org_id: i64, method: AuthMethod) -
         Ok(o) => o.name,
         Err(_) => String::new(),
     };
-    Ok(identity_of(UserInOrg { user: u.clone(), org_id: org, role, org_name }, method))
+    let uo = UserInOrg {
+        id: u.id,
+        uid: u.uid.clone(),
+        login: u.login.clone(),
+        email: u.email.clone(),
+        name: u.name.clone(),
+        password: String::new(),
+        theme: u.theme.clone(),
+        help_flags1: u.help_flags1,
+        is_admin: u.is_admin,
+        is_disabled: u.is_disabled,
+        is_service_account: u.is_service_account,
+        last_seen_at: u.last_seen_at,
+        org_id: org,
+        role,
+        org_name,
+    };
+    Ok(identity_of(uo, method))
 }
 
 /// The identity of a user read with `Store::user_in_org` (the same result as `identity_for_user`, in one query).
-fn identity_of(uo: UserInOrg, method: AuthMethod) -> SignedInUser {
-    let u = uo.user;
+fn identity_of(u: UserInOrg, method: AuthMethod) -> SignedInUser {
     SignedInUser {
         user_id: u.id,
         uid: u.uid,
-        org_id: uo.org_id,
-        org_name: uo.org_name,
-        org_role: uo.role,
+        org_id: u.org_id,
+        org_name: u.org_name,
+        org_role: u.role,
         login: u.login,
         name: u.name,
         email: u.email,
@@ -268,7 +284,7 @@ fn basic_auth(app: &App, b64: &str, org_req: i64) -> AuthResult {
 fn cached_basic(app: &App, ck: &[u8; 32], org_req: i64) -> Option<AuthResult> {
     let (uid, pw_hash) = app.basic_cache.get(ck)?;
     match app.store.user_in_org(uid, org_req) {
-        Ok(uo) if uo.user.password == pw_hash => Some(finish_user_in_org(app, uo, AuthMethod::Basic)),
+        Ok(uo) if uo.password == pw_hash => Some(finish_user_in_org(app, uo, AuthMethod::Basic)),
         _ => None,
     }
 }
@@ -304,7 +320,7 @@ fn finish_user(app: &App, user: User, org_req: i64, method: AuthMethod) -> AuthR
 }
 
 fn finish_user_in_org(app: &App, uo: UserInOrg, method: AuthMethod) -> AuthResult {
-    if uo.user.is_disabled {
+    if uo.is_disabled {
         return AuthResult::Failed(mw_err(401, "identity.disabled", ""));
     }
     let id = identity_of(uo, method);
@@ -366,7 +382,7 @@ fn token_auth(app: &App, tok: &str, org_req: i64) -> AuthResult {
             Ok(u) => u,
             Err(_) => return invalid(),
         };
-        if uo.user.is_disabled {
+        if uo.is_disabled {
             return AuthResult::Failed(mw_err(401, "identity.disabled", ""));
         }
         let mut id = identity_of(uo, AuthMethod::ApiKey);

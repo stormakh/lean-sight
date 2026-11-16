@@ -30,12 +30,18 @@ fn database_healthy(c: &Ctx<'_>) -> bool {
 /// upstream apiHealthHandler: indented JSON, 503 when the database fails.
 fn health(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     let ok = database_healthy(c);
-    let mut d = Json::obj().with("database", if ok { "ok" } else { "failing" });
-    if !c.app.cfg.anonymous_hide_version {
-        d.set("version", c.app.cfg.build_version.as_str());
-        d.set("commit", c.app.cfg.build_commit.as_str());
+    // the indented JSON of Go's MarshalIndent, written directly (no JSON tree on this hot path)
+    let cfg = &c.app.cfg;
+    let mut s = String::with_capacity(128);
+    s.push_str(if ok { "{\n  \"database\": \"ok\"" } else { "{\n  \"database\": \"failing\"" });
+    if !cfg.anonymous_hide_version {
+        s.push_str(",\n  \"version\": ");
+        json::write_str(&cfg.build_version, &mut s);
+        s.push_str(",\n  \"commit\": ");
+        json::write_str(&cfg.build_commit, &mut s);
     }
-    Ok(Response::text(if ok { 200 } else { 503 }, "application/json; charset=UTF-8", d.stringify_pretty("  ")))
+    s.push_str("\n}");
+    Ok(Response::text(if ok { 200 } else { 503 }, "application/json; charset=UTF-8", s))
 }
 
 fn healthz(_c: &mut Ctx<'_>) -> Result<Response, ApiError> {

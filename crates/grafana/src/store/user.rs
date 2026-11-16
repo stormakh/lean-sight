@@ -31,10 +31,22 @@ pub struct User {
     pub last_seen_at: i64,
 }
 
-/// A user with the org a request works in, read in one query for authentication.
+/// The user columns an identity needs, with the org a request works in, read in one query for authentication.
 #[derive(Debug, Clone, Default)]
 pub struct UserInOrg {
-    pub user: User,
+    pub id: i64,
+    pub uid: String,
+    pub login: String,
+    pub email: String,
+    pub name: String,
+    /// The stored password hash (to check a basic-auth cache entry).
+    pub password: String,
+    pub theme: String,
+    pub help_flags1: i64,
+    pub is_admin: bool,
+    pub is_disabled: bool,
+    pub is_service_account: bool,
+    pub last_seen_at: i64,
     /// `org_id` asked for when the user is a member there, else the user's current org.
     pub org_id: i64,
     /// The role in that org, `Role::None` when not a member.
