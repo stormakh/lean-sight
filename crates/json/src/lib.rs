@@ -706,7 +706,8 @@ fn parse_num(b: &[u8], txt: &str, p: &mut usize) -> Result<Json, JsonError> {
             Err(_) => return Err(err("invalid number", s)),
         }
     };
-    if !is_float {
+    // "-0" is a float (-0.0) as in Go, so it writes back as "-0", not "0"
+    if !is_float && t != "-0" {
         if let Ok(n) = t.parse::<i64>() {
             return Ok(Json::Int(n));
         }

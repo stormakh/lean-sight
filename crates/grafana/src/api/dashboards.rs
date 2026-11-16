@@ -109,6 +109,131 @@ pub fn set_sorted(o: &mut Json, k: &str, v: Json) {
     }
 }
 
+/// The stored dashboard text with `id`, `uid` and `version` set as `set_sorted` sets them, without a JSON tree.
+/// Stored data is always our JSON writer's output (`save` writes `spec.stringify()`), and writing a parsed writer
+/// output gives back the same text, so copying the text is the same as parse + `set_sorted` + write. None (use
+/// the tree) unless the text is a compact object whose top-level keys have no escapes and are in strict order.
+fn patch_ids(data: &str, id: i64, uid: &str, version: i64) -> Option<String> {
+    let b = data.as_bytes();
+    if b.len() < 2 || b[0] != b'{' || b[b.len() - 1] != b'}' {
+        return None;
+    }
+    // top-level members: (key, value start, value end)
+    let mut members: Vec<(&str, usize, usize)> = Vec::with_capacity(32);
+    let mut i = 1;
+    if b[i] != b'}' {
+        loop {
+            if b[i] != b'"' {
+                return None;
+            }
+            let ks = i + 1;
+            let mut j = ks;
+            while j < b.len() && b[j] != b'"' {
+                if b[j] == b'\\' {
+                    return None;
+                }
+                j += 1;
+            }
+            if j + 1 >= b.len() || b[j + 1] != b':' {
+                return None;
+            }
+            let key = &data[ks..j];
+            if let Some(last) = members.last() {
+                if last.0 >= key {
+                    return None;
+                }
+            }
+            let vs = j + 2;
+            let ve = skip_value(b, vs)?;
+            if ve == vs {
+                return None;
+            }
+            members.push((key, vs, ve));
+            match b.get(ve) {
+                Some(b',') => i = ve + 1,
+                Some(b'}') if ve == b.len() - 1 => break,
+                _ => return None,
+            }
+        }
+    }
+    let mut out = String::with_capacity(data.len() + 64);
+    out.push('{');
+    let mut first = true;
+    let mut put = |out: &mut String, k: &str, v: &str| {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        json::write_str(k, out);
+        out.push(':');
+        out.push_str(v);
+    };
+    let mut uid_text = String::with_capacity(uid.len() + 2);
+    json::write_str(uid, &mut uid_text);
+    let mut ours: [(&str, String); 3] = [("id", id.to_string()), ("uid", uid_text), ("version", version.to_string())];
+    let mut next = 0;
+    for (k, vs, ve) in members.iter() {
+        while next < 3 && ours[next].0 < *k {
+            put(&mut out, ours[next].0, &ours[next].1);
+            next += 1;
+        }
+        if next < 3 && ours[next].0 == *k {
+            put(&mut out, k, &std::mem::take(&mut ours[next].1));
+            next += 1;
+        } else {
+            put(&mut out, k, &data[*vs..*ve]);
+        }
+    }
+    while next < 3 {
+        put(&mut out, ours[next].0, &ours[next].1);
+        next += 1;
+    }
+    out.push('}');
+    Some(out)
+}
+
+/// End of the compact JSON value that starts at `i` (None on whitespace, a bad byte, or the end of the text).
+fn skip_value(b: &[u8], mut i: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    loop {
+        match *b.get(i)? {
+            b'"' => {
+                i += 1;
+                loop {
+                    match *b.get(i)? {
+                        b'\\' => i += 2,
+                        b'"' => break,
+                        _ => i += 1,
+                    }
+                }
+                i += 1;
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' | b']' => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+                i += 1;
+            }
+            b',' | b':' => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                i += 1;
+            }
+            b' ' | b'\t' | b'\n' | b'\r' => return None,
+            _ => i += 1,
+        }
+        if depth == 0 && matches!(b.get(i), Some(b',') | Some(b'}')) {
+            return Some(i);
+        }
+    }
+}
+
 fn parse_obj(text: &str) -> Json {
     match Json::parse(text) {
         Ok(v) if v.as_obj().is_some() => v,
@@ -267,10 +392,16 @@ fn get_dashboard(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         Err(StoreError::NotFound) => return Err(ApiError::new(404, "Dashboard not found")),
         Err(e) => return Err(e.into()),
     };
-    let mut dash = parse_obj(&d.data);
-    set_sorted(&mut dash, "id", Json::Int(d.id));
-    set_sorted(&mut dash, "uid", Json::from(d.uid.as_str()));
-    set_sorted(&mut dash, "version", Json::Int(d.version));
+    let dash_text = match patch_ids(&d.data, d.id, &d.uid, d.version) {
+        Some(t) => t,
+        None => {
+            let mut dash = parse_obj(&d.data);
+            set_sorted(&mut dash, "id", Json::Int(d.id));
+            set_sorted(&mut dash, "uid", Json::from(d.uid.as_str()));
+            set_sorted(&mut dash, "version", Json::Int(d.version));
+            dash.stringify()
+        }
+    };
     let p = perms(c.app, &c.user);
     let updater = shown_login(d.updated_by, updated_login);
     let creator = shown_login(d.created_by, created_login);
@@ -316,7 +447,7 @@ fn get_dashboard(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     out.push_str("{\"meta\":");
     meta.write(&mut out);
     out.push_str(",\"dashboard\":");
-    dash.write(&mut out);
+    out.push_str(&dash_text);
     out.push('}');
     Ok(Response::json_text(200, out))
 }
