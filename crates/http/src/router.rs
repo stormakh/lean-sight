@@ -236,7 +236,15 @@ fn build_node<T>(entries: &[Entry<T>], t: &mut Trie, n: usize, es: &[u32], d: us
     t.nodes[n].ends = (start, mid);
     t.nodes[n].tails = (mid, t.idx.len() as u32);
     // one edge per distinct literal, sorted; entries keep insertion order inside each group
-    lits.sort_by(|a, b| lit_of(entries, *a, d as u32).cmp(lit_of(entries, *b, d as u32)).then(a.cmp(b)));
+    // insertion sort by literal (stable, so insertion order stays inside a group); it runs once, on few items,
+    // and keeps the binary small
+    for i in 1..lits.len() {
+        let mut j = i;
+        while j > 0 && lit_of(entries, lits[j - 1], d as u32) > lit_of(entries, lits[j], d as u32) {
+            lits.swap(j - 1, j);
+            j -= 1;
+        }
+    }
     let e0 = t.edges.len();
     let mut groups: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
