@@ -7,3 +7,7 @@ grafana-trimmed,health,7551,1.124,484,11.69
 grafana-trimmed,search,383,23.856,469,90.68
 grafana-trimmed,dashboard,369,25.924,429,106.0
 grafana-trimmed,ds_query,212,37.632,520,160.79
+grafana-rs,health,86202,0.03,5,0.51
+grafana-rs,search,6472,0.274,6,7.11
+grafana-rs,dashboard,13091,0.236,6,2.66
+grafana-rs,ds_query,2088,0.82,6,17.7
