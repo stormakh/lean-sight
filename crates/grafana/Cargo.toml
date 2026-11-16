@@ -1,0 +1,10 @@
+[package]
+name = "grafana"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+json = { path = "../json" }
+crypto = { path = "../crypto" }
+http = { path = "../http" }
