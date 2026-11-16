@@ -4,12 +4,12 @@
 use crate::app::App;
 use crate::ctx::{AuthMethod, Role, SignedInUser};
 use crate::error::ApiError;
-use crate::store::{StoreError, User, UserAuthToken};
+use crate::store::{StoreError, User, UserAuthToken, UserInOrg};
 use crate::util::now;
 use http::{Cookie, Request};
 use json::Json;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// Session tokens that were never seen by the client must rotate after this long (usertoken.UrgentRotateTime).
@@ -30,10 +30,15 @@ fn mw_err(status: u16, message_id: &str, message: &str) -> ApiError {
 }
 
 /// Cache of recent successful basic-auth checks, so a client that sends basic auth on every request pays the
-/// 10000-round PBKDF2 once per minute, not per request. Keyed by a MAC of the credentials; a hit is valid only
-/// while the user's stored password hash is unchanged.
+/// 10000-round PBKDF2 once per minute, not per request. Keyed by a MAC of the credentials (with a random key made at
+/// startup; no password is kept); a hit is valid only while the user's stored password hash is unchanged.
+/// Concurrent misses for the same credentials run one PBKDF2: the others wait for its result (when an entry expires
+/// under load, 16 clients would otherwise each pay the full hash at the same moment).
 pub struct BasicCache {
-    map: Mutex<HashMap<String, (i64, String, Instant)>>,
+    map: Mutex<HashMap<[u8; 32], (i64, String, Instant)>>,
+    /// Keys whose password check runs now.
+    checking: Mutex<Vec<[u8; 32]>>,
+    checked: Condvar,
     key: crypto::HmacSha256,
 }
 const BASIC_CACHE_TTL: Duration = Duration::from_secs(60);
@@ -42,16 +47,16 @@ impl BasicCache {
     pub fn new() -> BasicCache {
         let mut k = [0u8; 32];
         crypto::random_bytes(&mut k);
-        BasicCache { map: Mutex::new(HashMap::new()), key: crypto::HmacSha256::new(&k) }
+        BasicCache { map: Mutex::new(HashMap::new()), checking: Mutex::new(Vec::new()), checked: Condvar::new(), key: crypto::HmacSha256::new(&k) }
     }
-    fn cache_key(&self, login: &str, password: &str) -> String {
+    fn cache_key(&self, login: &str, password: &str) -> [u8; 32] {
         let mut s = self.key.start();
         s.update(login.as_bytes());
         s.update(&[0]);
         s.update(password.as_bytes());
-        crypto::hex(&s.finish())
+        s.finish()
     }
-    fn get(&self, k: &str) -> Option<(i64, String)> {
+    fn get(&self, k: &[u8; 32]) -> Option<(i64, String)> {
         let m = match self.map.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -61,7 +66,7 @@ impl BasicCache {
             _ => None,
         }
     }
-    fn put(&self, k: String, user_id: i64, pw_hash: String) {
+    fn put(&self, k: [u8; 32], user_id: i64, pw_hash: String) {
         let mut m = match self.map.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -70,6 +75,33 @@ impl BasicCache {
             m.clear();
         }
         m.insert(k, (user_id, pw_hash, Instant::now()));
+    }
+    /// True when the caller must check the password and then call `end`; false after waiting for another
+    /// thread's check of the same key to finish.
+    fn begin(&self, k: &[u8; 32]) -> bool {
+        let mut c = match self.checking.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if !c.contains(k) {
+            c.push(*k);
+            return true;
+        }
+        while c.contains(k) {
+            c = match self.checked.wait(c) {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+        }
+        false
+    }
+    fn end(&self, k: &[u8; 32]) {
+        let mut c = match self.checking.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        c.retain(|x| x != k);
+        self.checked.notify_all();
     }
 }
 impl Default for BasicCache {
@@ -123,16 +155,22 @@ pub fn identity_for_user(app: &App, u: &User, org_id: i64, method: AuthMethod) -
         Ok(o) => o.name,
         Err(_) => String::new(),
     };
-    Ok(SignedInUser {
+    Ok(identity_of(UserInOrg { user: u.clone(), org_id: org, role, org_name }, method))
+}
+
+/// The identity of a user read with `Store::user_in_org` (the same result as `identity_for_user`, in one query).
+fn identity_of(uo: UserInOrg, method: AuthMethod) -> SignedInUser {
+    let u = uo.user;
+    SignedInUser {
         user_id: u.id,
-        uid: u.uid.clone(),
-        org_id: org,
-        org_name,
-        org_role: role,
-        login: u.login.clone(),
-        name: u.name.clone(),
-        email: u.email.clone(),
-        theme: u.theme.clone(),
+        uid: u.uid,
+        org_id: uo.org_id,
+        org_name: uo.org_name,
+        org_role: uo.role,
+        login: u.login,
+        name: u.name,
+        email: u.email,
+        theme: u.theme,
         help_flags1: u.help_flags1,
         is_grafana_admin: u.is_admin,
         is_anonymous: false,
@@ -142,7 +180,7 @@ pub fn identity_for_user(app: &App, u: &User, org_id: i64, method: AuthMethod) -
         auth: method,
         session_id: 0,
         api_key_id: 0,
-    })
+    }
 }
 
 /// Authenticates a request. Order as upstream: token, basic, session cookie, anonymous.
@@ -211,17 +249,31 @@ fn basic_auth(app: &App, b64: &str, org_req: i64) -> AuthResult {
         return failed();
     }
     let ck = app.basic_cache.cache_key(login, password);
-    let user = match app.basic_cache.get(&ck) {
-        Some((uid, pw_hash)) => match app.store.user_by_id(uid) {
-            Ok(u) if u.password == pw_hash => u,
-            _ => return check_password(app, login, password, ck, org_req),
-        },
-        None => return check_password(app, login, password, ck, org_req),
-    };
-    finish_user(app, user, org_req, AuthMethod::Basic)
+    if let Some(r) = cached_basic(app, &ck, org_req) {
+        return r;
+    }
+    if !app.basic_cache.begin(&ck) {
+        // another request checked the same credentials just now
+        if let Some(r) = cached_basic(app, &ck, org_req) {
+            return r;
+        }
+        return check_password(app, login, password, ck, org_req);
+    }
+    let r = check_password(app, login, password, ck, org_req);
+    app.basic_cache.end(&ck);
+    r
 }
 
-fn check_password(app: &App, login: &str, password: &str, ck: String, org_req: i64) -> AuthResult {
+/// A basic-auth cache hit, when the user's password hash is still the one that was checked.
+fn cached_basic(app: &App, ck: &[u8; 32], org_req: i64) -> Option<AuthResult> {
+    let (uid, pw_hash) = app.basic_cache.get(ck)?;
+    match app.store.user_in_org(uid, org_req) {
+        Ok(uo) if uo.user.password == pw_hash => Some(finish_user_in_org(app, uo, AuthMethod::Basic)),
+        _ => None,
+    }
+}
+
+fn check_password(app: &App, login: &str, password: &str, ck: [u8; 32], org_req: i64) -> AuthResult {
     let failed = || AuthResult::Failed(mw_err(401, "password-auth.failed", "Invalid username or password"));
     let user = match app.store.user_by_login_or_email(login) {
         Ok(u) => u,
@@ -249,6 +301,15 @@ fn finish_user(app: &App, user: User, org_req: i64, method: AuthMethod) -> AuthR
         }
         Err(e) => AuthResult::Failed(e),
     }
+}
+
+fn finish_user_in_org(app: &App, uo: UserInOrg, method: AuthMethod) -> AuthResult {
+    if uo.user.is_disabled {
+        return AuthResult::Failed(mw_err(401, "identity.disabled", ""));
+    }
+    let id = identity_of(uo, method);
+    touch_last_seen(app, &id);
+    AuthResult::Ok(id)
 }
 
 /// Updates `last_seen_at` at most every 5 minutes, as Grafana's user sync does.
@@ -301,20 +362,16 @@ fn token_auth(app: &App, tok: &str, org_req: i64) -> AuthResult {
         let _ = app.store.api_key_set_last_used(key.id, t);
     }
     if key.service_account_id > 0 {
-        let user = match app.store.user_by_id(key.service_account_id) {
+        let uo = match app.store.user_in_org(key.service_account_id, key.org_id) {
             Ok(u) => u,
             Err(_) => return invalid(),
         };
-        if user.is_disabled {
+        if uo.user.is_disabled {
             return AuthResult::Failed(mw_err(401, "identity.disabled", ""));
         }
-        return match identity_for_user(app, &user, key.org_id, AuthMethod::ApiKey) {
-            Ok(mut id) => {
-                id.api_key_id = key.id;
-                AuthResult::Ok(id)
-            }
-            Err(e) => AuthResult::Failed(e),
-        };
+        let mut id = identity_of(uo, AuthMethod::ApiKey);
+        id.api_key_id = key.id;
+        return AuthResult::Ok(id);
     }
     // a legacy API key without a service account
     let org_name = app.store.org_by_id(key.org_id).map(|o| o.name).unwrap_or_default();
@@ -360,11 +417,11 @@ fn session_auth(app: &App, raw: &str, org_req: i64, req: &Request) -> AuthResult
         return AuthResult::Failed(mw_err(401, "session.token.rotate", ""));
     }
     let _ = req;
-    let user = match app.store.user_by_id(tok.user_id) {
+    let uo = match app.store.user_in_org(tok.user_id, org_req) {
         Ok(u) => u,
         Err(_) => return not_found(),
     };
-    match finish_user(app, user, org_req, AuthMethod::Session) {
+    match finish_user_in_org(app, uo, AuthMethod::Session) {
         AuthResult::Ok(mut id) => {
             id.session_id = tok.id;
             AuthResult::Ok(id)

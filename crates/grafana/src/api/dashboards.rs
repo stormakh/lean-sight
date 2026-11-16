@@ -75,15 +75,17 @@ pub fn login_of(app: &App, user_id: i64) -> String {
     if user_id <= 0 {
         return "Anonymous".to_string();
     }
-    match app.store.user_by_id(user_id) {
-        Ok(u) => {
-            if u.is_service_account {
-                u.name
-            } else {
-                u.login
-            }
-        }
+    match app.store.user_display_login(user_id) {
+        Ok(l) => l,
         Err(_) => "Anonymous".to_string(),
+    }
+}
+
+/// `login_of` for a login already read with the row (None: no such user).
+fn shown_login(user_id: i64, login: Option<String>) -> String {
+    match login {
+        Some(l) if user_id > 0 => l,
+        _ => "Anonymous".to_string(),
     }
 }
 
@@ -260,7 +262,7 @@ fn legacy_fields(spec: &Json, folder: bool, message: bool, generate_name: bool, 
 // legacy API
 
 fn get_dashboard(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
-    let d = match c.app.store.dashboard_by_uid(c.user.org_id, c.param("uid")) {
+    let (d, created_login, updated_login) = match c.app.store.dashboard_by_uid_with_logins(c.user.org_id, c.param("uid")) {
         Ok(d) => d,
         Err(StoreError::NotFound) => return Err(ApiError::new(404, "Dashboard not found")),
         Err(e) => return Err(e.into()),
@@ -270,8 +272,8 @@ fn get_dashboard(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     set_sorted(&mut dash, "uid", Json::from(d.uid.as_str()));
     set_sorted(&mut dash, "version", Json::Int(d.version));
     let p = perms(c.app, &c.user);
-    let updater = login_of(c.app, d.updated_by);
-    let creator = if d.created_by == d.updated_by { updater.clone() } else { login_of(c.app, d.created_by) };
+    let updater = shown_login(d.updated_by, updated_login);
+    let creator = shown_login(d.created_by, created_login);
     let mut meta = Json::obj()
         .with("type", "db")
         .with("canSave", p.can_save)

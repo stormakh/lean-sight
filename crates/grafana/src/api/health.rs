@@ -3,7 +3,7 @@ use crate::ctx::{Access, Ctx, Routes};
 use crate::error::ApiError;
 use http::Response;
 use json::Json;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 pub fn routes(r: &mut Routes) {
     r.get("/api/health", Access::Public, health);
@@ -12,9 +12,24 @@ pub fn routes(r: &mut Routes) {
     r.get("/api/rs/whoami", Access::SignedIn, whoami);
 }
 
+/// The last database check: `(expiry in unix ms << 1) | healthy`, 0 when none yet.
+static DB_HEALTHY: AtomicI64 = AtomicI64::new(0);
+
+/// upstream databaseHealthy: the result of `SELECT 1` is cached for 5 s (CacheService key "db-healthy").
+fn database_healthy(c: &Ctx<'_>) -> bool {
+    let now = crate::util::now_ms();
+    let v = DB_HEALTHY.load(Ordering::Relaxed);
+    if v != 0 && (v >> 1) > now {
+        return v & 1 == 1;
+    }
+    let ok = c.app.store.ping();
+    DB_HEALTHY.store(((now + 5000) << 1) | ok as i64, Ordering::Relaxed);
+    ok
+}
+
 /// upstream apiHealthHandler: indented JSON, 503 when the database fails.
 fn health(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
-    let ok = c.app.store.ping();
+    let ok = database_healthy(c);
     let mut d = Json::obj().with("database", if ok { "ok" } else { "failing" });
     if !c.app.cfg.anonymous_hide_version {
         d.set("version", c.app.cfg.build_version.as_str());

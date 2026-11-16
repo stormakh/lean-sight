@@ -77,6 +77,21 @@ impl DashboardStore for SqliteStore {
             Ok(d)
         })
     }
+    fn dashboard_by_uid_with_logins(&self, org_id: i64, uid: &str) -> SResult<(Dashboard, Option<String>, Option<String>)> {
+        self.db(|c| {
+            let (mut d, cl, ul) = c
+                .prepare_cached(concat!(
+                    "SELECT ",
+                    cols!(),
+                    ", (SELECT CASE WHEN u.is_service_account THEN u.name ELSE u.login END FROM user u WHERE u.id = dashboard.created_by),",
+                    " (SELECT CASE WHEN u.is_service_account THEN u.name ELSE u.login END FROM user u WHERE u.id = dashboard.updated_by)",
+                    " FROM dashboard WHERE org_id = ?1 AND uid = ?2"
+                ))?
+                .query_row(params![org_id, uid], |r| Ok((row(r)?, r.get::<_, Option<String>>(16)?, r.get::<_, Option<String>>(17)?)))?;
+            d.tags = tags_of(c, d.id)?;
+            Ok((d, cl, ul))
+        })
+    }
     fn dashboard_by_id(&self, org_id: i64, id: i64) -> SResult<Dashboard> {
         self.db(|c| {
             let mut d = c.prepare_cached(concat!("SELECT ", cols!(), " FROM dashboard WHERE org_id = ?1 AND id = ?2"))?.query_row(params![org_id, id], row)?;
@@ -152,8 +167,12 @@ impl DashboardStore for SqliteStore {
                     list[i].tags.push(term);
                 }
             }
-            list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
             Ok(list)
+        })
+        .map(|mut list| {
+            // sorted after the connection lock is released
+            list.sort_by_cached_key(|d| d.title.to_lowercase());
+            list
         })
     }
     fn dashboards_full(&self, org_id: i64, after_uid: &str, limit: i64) -> SResult<Vec<Dashboard>> {
