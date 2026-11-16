@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grafana-rs report</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1b;--mute:#6b6a65;--line:#e4e1d8;--card:#fff;--go:#c2410c;--rs:#15803d;--warn:#a16207}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--mute:#9b9a94;--line:#2c2b28;--card:#1c1c1a;--go:#fb923c;--rs:#4ade80;--warn:#facc15}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:28px;margin:0 0 4px}h2{font-size:19px;margin:36px 0 10px;padding-top:12px;border-top:1px solid var(--line)}
+.sub{color:var(--mute);margin:0 0 20px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:18px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi b{display:block;font-size:26px;color:var(--rs)}.kpi span{color:var(--mute);font-size:13px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:14px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{font-weight:600;color:var(--mute);font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.ok{color:var(--rs);font-weight:600}.w{color:var(--warn);font-weight:600}
+.bars{display:grid;gap:10px;margin:12px 0}.bar{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center;font-size:13px}
+.track{display:grid;gap:3px}.b{height:14px;border-radius:3px;min-width:2px}.b.go{background:var(--go)}.b.rs{background:var(--rs)}
+.lab{font-size:12px;color:var(--mute)}code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--line);padding:1px 4px;border-radius:4px}
+ul{padding-left:20px}li{margin:3px 0}.wrap{overflow-x:auto}
+.legend{display:flex;gap:16px;font-size:13px;color:var(--mute)}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body><main>
+<h1>grafana-rs</h1>
+<p class="sub">The Grafana 13.3.1 server, rewritten in Rust. It serves the real, unchanged Grafana web UI. Measured on LastSun on 16 Nov 2026.</p>
+
+<div class="kpis">
+<div class="kpi"><b>155X</b><span>less idle memory (5.5 MB vs 848 MB)</span></div>
+<div class="kpi"><b>137X</b><span>less peak memory under load</span></div>
+<div class="kpi"><b>37–99X</b><span>less CPU per request</span></div>
+<div class="kpi"><b>0 ticks</b><span>idle CPU in 5 min (Grafana: 167)</span></div>
+<div class="kpi"><b>162/165 · 77/77</b><span>recorded UI and API calls that match</span></div>
+</div>
+
+<p><b>Goals</b> (frozen before any Rust code): 20X less memory and 30X less CPU than default Grafana. <span class="ok">All are met.</span></p>
+
+<h2>1. Resource use</h2>
+<p>Same machine, same script (<code>bench/baseline.sh</code>): fresh start, seed 1 Prometheus data source and 1 dashboard with 4 panels, 2 min warm-up, 5 min idle, then 5,000 requests per workload at 16 concurrent. Memory is PSS of the whole process tree. CPU is user + system time of the tree, divided by requests. Prometheus' own CPU is not counted on either side. Both servers gzip answers (Grafana's default <code>enable_gzip = true</code>).</p>
+<div class="wrap"><table>
+<tr><th>Metric</th><th class="n">Default Grafana</th><th class="n">Trimmed Grafana</th><th class="n">grafana-rs</th><th class="n">vs default</th><th class="n">vs trimmed</th><th class="n">Goal</th></tr>
+<tr><td>Idle memory</td><td class="n">848 MB · 15 procs</td><td class="n">352 MB · 2 procs</td><td class="n">5.5 MB · 1 proc</td><td class="n ok">155X</td><td class="n ok">64X</td><td class="n">20X</td></tr>
+<tr><td>Peak memory under load</td><td class="n">1,064 MB</td><td class="n">546 MB</td><td class="n">7.8 MB</td><td class="n ok">137X</td><td class="n ok">70X</td><td class="n">20X</td></tr>
+<tr><td>Idle CPU (295 s)</td><td class="n">167 ticks · 0.57%</td><td class="n">102 ticks · 0.35%</td><td class="n">0 ticks · &lt;0.0034%</td><td class="n ok">≥167X</td><td class="n ok">≥102X</td><td class="n">30X</td></tr>
+<tr><td>CPU per <code>/api/health</code></td><td class="n">1.248 ms</td><td class="n">1.124 ms</td><td class="n">0.034 ms</td><td class="n ok">37X</td><td class="n ok">33X</td><td class="n">30X</td></tr>
+<tr><td>CPU per search</td><td class="n">23.55 ms</td><td class="n">23.86 ms</td><td class="n">0.264 ms</td><td class="n ok">89X</td><td class="n ok">90X</td><td class="n">30X</td></tr>
+<tr><td>CPU per dashboard load</td><td class="n">25.92 ms</td><td class="n">25.92 ms</td><td class="n">0.262 ms</td><td class="n ok">99X</td><td class="n ok">99X</td><td class="n">30X</td></tr>
+<tr><td>CPU per Prometheus query</td><td class="n">37.75 ms</td><td class="n">37.63 ms</td><td class="n">0.852 ms</td><td class="n ok">44X</td><td class="n ok">44X</td><td class="n">30X</td></tr>
+<tr><td>Requests/s: health · search · dashboard · query</td><td class="n">7,273 · 388 · 390 · 205</td><td class="n">7,551 · 383 · 369 · 212</td><td class="n">114,776 · 6,828 · 12,214 · 2,281</td><td></td><td></td><td></td></tr>
+<tr><td>Startup to first <code>/api/health</code></td><td class="n">32.0 s (first start)</td><td class="n">27.7 s</td><td class="n">64 ms</td><td></td><td></td><td></td></tr>
+<tr><td>Server binary</td><td class="n" colspan="2">467 MB (+14 plugin binaries)</td><td class="n">4.5 MB</td><td></td><td></td><td></td></tr>
+</table></div>
+
+<p class="legend"><span><i style="background:var(--go)"></i>default Grafana</span><span><i style="background:var(--rs)"></i>grafana-rs</span></p>
+<div class="bars">
+<div class="bar"><div>Idle memory</div><div class="track"><div class="b go" style="width:100%"></div><div class="b rs" style="width:0.65%"></div><div class="lab">848 MB · 5.5 MB</div></div></div>
+<div class="bar"><div>CPU per search</div><div class="track"><div class="b go" style="width:100%"></div><div class="b rs" style="width:1.12%"></div><div class="lab">23.55 ms · 0.264 ms</div></div></div>
+<div class="bar"><div>CPU per dashboard</div><div class="track"><div class="b go" style="width:100%"></div><div class="b rs" style="width:1.01%"></div><div class="lab">25.92 ms · 0.262 ms</div></div></div>
+<div class="bar"><div>CPU per query</div><div class="track"><div class="b go" style="width:100%"></div><div class="b rs" style="width:2.26%"></div><div class="lab">37.75 ms · 0.852 ms</div></div></div>
+</div>
+<p>Where Grafana's memory goes: the main server is about 400 MB, and 14 data-source plugin processes (Postgres, Loki, CloudWatch, and others) use 30–45 MB each, even with no such data source configured. "Trimmed" turns those plugins, alerting, live and plugin installs off; it saves memory but not CPU per request.</p>
+
+<h2>2. Does it behave like Grafana?</h2>
+<ul>
+<li><b>Real UI in Chrome</b> (the unchanged Grafana 13.3.1 frontend against grafana-rs): home, dashboard with 4 live Prometheus panels, dashboard list and search, data source edit and "Save &amp; test" ("Successfully queried the Prometheus API"), panel edit, Explore, create and save a new dashboard. No console errors; every API call answered 200.</li>
+<li><b>Replay of recorded real-Grafana traffic</b> with a strict scorer (exact JSON text and key order, exact large integers, full HTML pages, Content-Type and Location headers, typed rules for times and generated ids; 90 named rules, each with a reason):
+ <ul><li>UI tour, 165 calls: <span class="ok">162/165</span>. The 3 that differ are <code>/api/gnet/*</code> (grafana.com catalog): grafana-rs answers 502, as Grafana does when grafana.com is not reachable.</li>
+ <li>API flows, 77 calls (login, users, data sources, Prometheus queries incl. errors, folders, dashboard versions and conflicts, annotations, query history): <span class="ok">77/77</span>.</li></ul></li>
+<li><b>Upstream Prometheus plugin tests</b> (grafana-prometheus-datasource v13.2.6, <code>pkg/promlib</code>) ported one by one, with the 72 golden files byte-identical to upstream: <span class="ok">328/328 pass</span>. Cases not ported are listed with reasons in <code>tests-data/not-ported.md</code>.</li>
+<li><b>Independent review</b> by GPT Sol 6.1 (read-only) found the first scorer too weak. The scorer was made strict; it then found 4 real bugs (template comments, Content-Type charset, version time zone, Advisor ids), all fixed. It found no code that special-cases the recorded ids.</li>
+</ul>
+
+<h2>3. What is ported and what is not</h2>
+<div class="wrap"><table>
+<tr><th>Ported (Rust)</th><th>Answered with an empty or "off" result</th><th>Not ported</th></tr>
+<tr><td>
+HTTP server and static files · boot data, nav tree, settings, permissions · login, sessions, basic auth, service-account tokens, anonymous mode · users, orgs, preferences, stars, teams (read) · dashboards (classic JSON), versions, conflicts · folders · search · annotations · data sources with encrypted secrets · <code>/api/ds/query</code> · the Prometheus plugin (query model, step and interval math, converter, exemplars, health, resources) · query history · plugin metadata · API discovery · feature flags (OFREP) · <code>/api/health</code>, <code>/metrics</code>
+</td><td>
+alerting · live (websocket) · plugin catalog and installs · Advisor · provisioning · quotas · correlations · frontend metrics
+</td><td>
+server-side expressions (math, reduce, threshold) · ad hoc filters, group-by and scopes on Prometheus queries (need a PromQL parser) · the <code>suggestions</code> resource · other data source types (Loki, Postgres, ...) · the v2 dashboard schema (the UI is told <code>dashboardNewLayouts=false</code>) · custom roles and per-dashboard permissions · OAuth, SAML, LDAP · migration of an existing Grafana database
+</td></tr>
+</table></div>
+
+<h2>4. Known differences from Grafana</h2>
+<ul>
+<li>Dashboards with schema version below 39 are not converted on the server; the UI converts them itself, so they still work.</li>
+<li>Search returns the same order as Grafana's bleve index, but the <code>score</code>, <code>maxScore</code> and <code>queryCost</code> numbers are our own (approved, checked difference).</li>
+<li>Permissions come from the org role only (Viewer, Editor, Admin). Every save adds 1 to the dashboard version, even with no change. Deleted dashboards are gone (no "recently deleted").</li>
+<li>Queries of one request run one after the other (Grafana runs them in parallel). Prometheus is called without gzip.</li>
+<li>A successful basic-auth check is cached 60 s; no login rate limit. Secrets use our own AES-GCM format. Live is off.</li>
+<li>The data source proxy is a plain forward (no plugin routes, OAuth pass-through, or cookies).</li>
+</ul>
+
+<h2>5. What these numbers do not prove</h2>
+<ul>
+<li>One small workload: 1 data source, 2–4 dashboards, 1 user. Many users, thousands of dashboards, or long runs (hours) were not tested. Throughput is limited by one SQLite connection.</li>
+<li>CPU per request has 10 ms tick resolution over 5,000 requests (health is 17 ticks in total).</li>
+<li>Only Prometheus 3.16.0 without auth was tested live. Basic auth, custom headers, warnings and native histograms were tested only through upstream golden files.</li>
+<li>The UI was tested in one browser, as anonymous Admin. Viewer and Editor boot data were compared with captures from real Grafana, not clicked through.</li>
+<li>Machine load varied during the day (other agents' builds); the Grafana and grafana-rs runs were not interleaved.</li>
+</ul>
+
+<h2>6. How it was built</h2>
+<p>Following <code>~/code/baileys-rs/PORTING-PLAYBOOK.md</code>: freeze the baseline and the recordings first, write the contract (<code>PORTING.md</code>), build the foundations, then 3 agents in parallel git worktrees (A: boot, auth, users · B: dashboards, folders, search · C: data sources and Prometheus), then an independent review and a hardening pass. The core crates (<code>json</code>, <code>crypto</code>, <code>http</code>, <code>grafana</code>) compile with Lust 0.2.0; SQLite and the binary use Cargo only.</p>
+<div class="wrap"><table>
+<tr><th>Crate</th><th class="n">Lines</th><th>What</th></tr>
+<tr><td>json</td><td class="n">733</td><td>JSON with ordered keys and Go number/string output</td></tr>
+<tr><td>crypto</td><td class="n">606</td><td>SHA-256, HMAC, PBKDF2, AES-GCM (from baileys-rs)</td></tr>
+<tr><td>http</td><td class="n">1,509</td><td>blocking HTTP/1.1 server (thread per connection, 64 KB stack), router, gzip, client</td></tr>
+<tr><td>grafana</td><td class="n">17,107</td><td>all Grafana logic and the Prometheus plugin</td></tr>
+<tr><td>store-sqlite · server</td><td class="n">1,161 · 91</td><td>SQLite store · binary</td></tr>
+<tr><td>tests</td><td class="n">2,447</td><td>the ported upstream promlib tests</td></tr>
+</table></div>
+<p class="lab">Repo: <code>~/code/grafana-rs</code> (50+ commits on <code>master</code>). Raw results: <code>bench/results/</code>. Review: <code>tests-data/review-sol-1.md</code>.</p>
+</main></body></html>
