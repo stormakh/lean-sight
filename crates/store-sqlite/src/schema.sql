@@ -106,8 +106,8 @@ CREATE TABLE IF NOT EXISTS folder (
   updated INTEGER NOT NULL,
   created_by INTEGER NOT NULL DEFAULT 0,
   updated_by INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (org_id, uid),
-  UNIQUE (org_id, parent_uid, title)
+  meta TEXT NOT NULL DEFAULT '',
+  UNIQUE (org_id, uid)
 );
 CREATE TABLE IF NOT EXISTS dashboard (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS dashboard (
   gnet_id INTEGER NOT NULL DEFAULT 0,
   plugin_id TEXT NOT NULL DEFAULT '',
   api_version TEXT NOT NULL DEFAULT '',
+  meta TEXT NOT NULL DEFAULT '',
   UNIQUE (org_id, uid)
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_folder ON dashboard (org_id, folder_uid);
@@ -140,6 +141,7 @@ CREATE TABLE IF NOT EXISTS dashboard_version (
   message TEXT NOT NULL DEFAULT '',
   data TEXT NOT NULL,
   api_version TEXT NOT NULL DEFAULT '',
+  meta TEXT NOT NULL DEFAULT '',
   UNIQUE (dashboard_id, version)
 );
 CREATE TABLE IF NOT EXISTS dashboard_tag (
@@ -149,6 +151,7 @@ CREATE TABLE IF NOT EXISTS dashboard_tag (
   term TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_tag_dash ON dashboard_tag (dashboard_id);
+CREATE INDEX IF NOT EXISTS idx_dashboard_tag_org ON dashboard_tag (org_id, term);
 CREATE TABLE IF NOT EXISTS data_source (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   uid TEXT NOT NULL,

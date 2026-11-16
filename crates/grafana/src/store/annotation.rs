@@ -47,6 +47,8 @@ pub trait AnnotationStore {
     /// Writes text, epochs, tags, data and updated by (org_id, id).
     fn annotation_update(&self, a: &Annotation) -> SResult<()>;
     fn annotation_delete(&self, org_id: i64, id: i64) -> SResult<()>;
+    /// Deletes the annotations of a dashboard panel (mass delete); returns how many.
+    fn annotations_delete(&self, org_id: i64, dashboard_uid: &str, panel_id: i64) -> SResult<i64>;
     fn annotation_by_id(&self, org_id: i64, id: i64) -> SResult<Annotation>;
     /// Newest first (epoch desc).
     fn annotations_find(&self, q: &AnnotationQuery) -> SResult<Vec<Annotation>>;
