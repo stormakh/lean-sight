@@ -2,6 +2,7 @@
 // a replay can compare data frames exactly (live Prometheus data changes between runs).
 //
 // usage: node scripts/prom-fixture.mjs [--port 9391] [file.jsonl ...]   (default: both v1 recordings)
+// To use it, seed prom1 with url http://localhost:9391 instead of :9390 (bench/seed.sh <url> after editing the url).
 //
 // For each recorded POST /api/ds/query, every result frame is turned back into the Prometheus answer it came from
 // (matrix or vector, labels, "NaN"/"+Inf"/"-Inf" from `entities`; an `error` row becomes a 400 bad_data answer).

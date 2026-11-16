@@ -36,12 +36,6 @@ pub fn routes(r: &mut Routes) {
     r.delete("/api/datasources/name/:name", a, delete_by_name);
     r.get("/api/datasources/id/:name", v, id_by_name);
     r.post("/api/ds/query", v, ds_query);
-    // correlations are out of scope: the empty page the UI expects
-    r.get("/api/datasources/correlations", v, correlations);
-}
-
-fn correlations(_c: &mut Ctx<'_>) -> Result<Response, ApiError> {
-    Ok(Response::json(200, &Json::obj().with("correlations", Json::arr()).with("totalCount", 0).with("page", 1).with("limit", 100).with("doesContinue", Json::Null)))
 }
 
 // ---------------------------------------------------------------- DTOs
