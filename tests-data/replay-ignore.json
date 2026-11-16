@@ -1,0 +1,19 @@
+{
+  "rules": [
+    { "route": "POST /apis/dashboard.grafana.app/v1/namespaces/*/dashboards", "path": "metadata.name", "mode": "map", "reason": "generated dashboard uid (generateName); later rows use it in URLs" },
+    { "route": "POST /apis/dashboard.grafana.app/v1/namespaces/*/dashboards", "path": "metadata.uid", "mode": "map", "reason": "generated Kubernetes object uid" },
+    { "route": "POST /apis/dashboard.grafana.app/v1/namespaces/*/dashboards", "path": "metadata.resourceVersion", "mode": "value", "reason": "write time in microseconds" },
+    { "route": "POST /apis/dashboard.grafana.app/v1/namespaces/*/dashboards", "path": "metadata.creationTimestamp", "mode": "value", "reason": "write time" },
+    { "route": "POST /apis/dashboard.grafana.app/v1/namespaces/*/dashboards", "path": ["metadata", "labels", "grafana.app/deprecatedInternalID"], "mode": "value", "reason": "generated snowflake id" },
+    { "route": "POST /apis/dashboard.grafana.app/v1/namespaces/*/dashboards", "path": "metadata.managedFields.*.time", "mode": "value", "reason": "write time" },
+    { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": "metadata.uid", "mode": "map", "reason": "generated Kubernetes object uid" },
+    { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": "metadata.resourceVersion", "mode": "value", "reason": "write time in microseconds" },
+    { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": "metadata.creationTimestamp", "mode": "value", "reason": "write time" },
+    { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": ["metadata", "labels", "grafana.app/deprecatedInternalID"], "mode": "value", "reason": "generated snowflake id" },
+    { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": "metadata.managedFields.*.time", "mode": "value", "reason": "write time" },
+    { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": ["metadata", "annotations", "grafana.app/createdBy"], "mode": "value", "reason": "user:<uid> of the seeding admin; the user uid is random per install" },
+    { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": ["metadata", "annotations", "grafana.app/updatedBy"], "mode": "value", "reason": "user:<uid> of the seeding admin; the user uid is random per install" },
+    { "route": "POST /api/query-history", "path": "result.uid", "mode": "map", "reason": "generated query history uid" },
+    { "route": "POST /api/query-history", "path": "result.createdAt", "mode": "value", "reason": "write time" }
+  ]
+}
