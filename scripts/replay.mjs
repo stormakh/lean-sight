@@ -1,6 +1,7 @@
 // Replay scorer: replays recorded UI traffic against a server and compares each response with the recording.
 //
-// usage: node scripts/replay.mjs [--target http://localhost:3400] [--seed] [--verbose] [--only <substring>] [file.jsonl ...]
+// usage: node scripts/replay.mjs [--target http://localhost:3400] [--seed] [--prom <url>] [--verbose] [--only <substring>] [file.jsonl ...]
+//   --prom: the URL of the seeded data source (default http://localhost:9390; a fixture Prometheus for exact frames).
 //   default file: tests-data/recordings/ui-tour-v1.jsonl. Several files replay in the order given, sharing ids and cookies.
 //
 // The recordings were made with anonymous Admin access (bench/grafana.sh capture-v1), so start the target the same way:
@@ -26,7 +27,7 @@ import path from 'node:path';
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const args = process.argv.slice(2);
 let target = 'http://localhost:3400';
-let seed = false, verbose = false, only = '';
+let seed = false, verbose = false, only = '', promUrl = 'http://localhost:9390';
 const files = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -34,6 +35,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--seed') seed = true;
   else if (a === '--verbose' || a === '-v') verbose = true;
   else if (a === '--only') only = args[++i];
+  else if (a === '--prom') promUrl = args[++i];
   else files.push(a);
 }
 if (!files.length) files.push(path.join(root, 'tests-data/recordings/ui-tour-v1.jsonl'));
@@ -161,7 +163,7 @@ async function call(method, url, headers, body) {
 async function doSeed() {
   const auth = 'Basic ' + Buffer.from('admin:admin').toString('base64');
   const h = { authorization: auth, 'content-type': 'application/json' };
-  const ds = await call('POST', '/api/datasources', h, JSON.stringify({ name: 'prometheus', type: 'prometheus', uid: 'prom1', url: 'http://localhost:9390', access: 'proxy', isDefault: true }));
+  const ds = await call('POST', '/api/datasources', h, JSON.stringify({ name: 'Prometheus', type: 'prometheus', uid: 'prom1', url: promUrl, access: 'proxy', isDefault: true, jsonData: { httpMethod: 'POST' } }));
   console.log(`seed: POST /api/datasources -> ${ds.status} ${ds.text.slice(0, 120)}`);
   const dash = fs.readFileSync(path.join(root, 'bench/dash.json'), 'utf8');
   const d = await call('POST', '/api/dashboards/db', h, dash);
