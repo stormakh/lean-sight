@@ -20,6 +20,20 @@
     { "route": "GET /apis/advisor.grafana.app/v0alpha1/namespaces/*/checktypes/*", "path": "metadata.creationTimestamp", "mode": "value", "reason": "time when Grafana registered the check type at startup" },
     { "route": "GET /apis/advisor.grafana.app/v0alpha1/namespaces/*/checktypes/*", "path": "metadata.managedFields.*.time", "mode": "value", "reason": "time when Grafana registered the check type at startup" },
     { "route": "POST /ofrep/v1/evaluate/flags", "path": "flags.*.key", "mode": "value", "reason": "Go map order is random in Grafana, so the array order differs between calls" },
-    { "route": "POST /ofrep/v1/evaluate/flags", "path": "flags.*.value", "mode": "any", "reason": "Go map order is random in Grafana, so the array order differs between calls" }
+    { "route": "POST /ofrep/v1/evaluate/flags", "path": "flags.*.value", "mode": "any", "reason": "Go map order is random in Grafana, so the array order differs between calls" },
+    { "route": "GET /**", "path": ["settings", "featureToggles", "dashboardNewLayouts"], "mode": "any", "reason": "grafana-rs sends dashboardNewLayouts=false explicitly (classic v1 dashboards); Grafana lists only enabled toggles" },
+    { "route": "GET /api/frontend/settings", "path": ["featureToggles", "dashboardNewLayouts"], "mode": "any", "reason": "grafana-rs sends dashboardNewLayouts=false explicitly (classic v1 dashboards); Grafana lists only enabled toggles" },
+    { "route": "GET /api/frontend/settings", "path": "liveEnabled", "mode": "value", "reason": "live (websocket) is out of scope: grafana-rs reports it disabled so the UI does not retry /api/live/ws" },
+    { "route": "GET /api/frontend/settings", "path": "appUrl", "mode": "value", "reason": "the recording server ran on another port (3300/3310)" },
+    { "route": "GET /api/frontend/settings", "path": "pluginCatalogPreinstalledPlugins.*.id", "mode": "value", "reason": "Grafana builds this list from a Go map, so its order is random" },
+    { "route": "GET /api/user", "path": "uid", "mode": "map", "reason": "random user uid per install" },
+    { "route": "GET /api/user", "path": "updatedAt", "mode": "value", "reason": "time of the user's creation or last request" },
+    { "route": "GET /api/user", "path": "createdAt", "mode": "value", "reason": "time of the user's creation or last request" },
+    { "route": "GET /api/org/users", "path": "*.uid", "mode": "map", "reason": "random user uid per install" },
+    { "route": "GET /api/org/users", "path": "*.lastSeenAt", "mode": "value", "reason": "time of the user's creation or last request" },
+    { "route": "GET /api/org/users", "path": "*.created", "mode": "value", "reason": "time of the user's creation or last request" },
+    { "route": "GET /api/users/search", "path": "users.*.uid", "mode": "map", "reason": "random user uid per install" },
+    { "route": "GET /api/users/search", "path": "users.*.lastSeenAt", "mode": "value", "reason": "time of the user's creation or last request" },
+    { "route": "GET /api/users/search", "path": "users.*.created", "mode": "value", "reason": "time of the user's creation or last request" }
   ]
 }
