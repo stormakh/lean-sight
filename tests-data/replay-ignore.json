@@ -14,6 +14,12 @@
     { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": ["metadata", "annotations", "grafana.app/createdBy"], "mode": "value", "reason": "user:<uid> of the seeding admin; the user uid is random per install" },
     { "route": "GET /apis/dashboard.grafana.app/v1/namespaces/*/dashboards/*/dto", "path": ["metadata", "annotations", "grafana.app/updatedBy"], "mode": "value", "reason": "user:<uid> of the seeding admin; the user uid is random per install" },
     { "route": "POST /api/query-history", "path": "result.uid", "mode": "map", "reason": "generated query history uid" },
-    { "route": "POST /api/query-history", "path": "result.createdAt", "mode": "value", "reason": "write time" }
+    { "route": "POST /api/query-history", "path": "result.createdAt", "mode": "value", "reason": "write time" },
+    { "route": "GET /apis/advisor.grafana.app/v0alpha1/namespaces/*/checktypes/*", "path": "metadata.uid", "mode": "value", "reason": "generated Kubernetes object uid (grafana-rs serves the uid of a capture from real Grafana 13.3.1)" },
+    { "route": "GET /apis/advisor.grafana.app/v0alpha1/namespaces/*/checktypes/*", "path": "metadata.resourceVersion", "mode": "value", "reason": "write time in microseconds when Grafana registered the check type at startup" },
+    { "route": "GET /apis/advisor.grafana.app/v0alpha1/namespaces/*/checktypes/*", "path": "metadata.creationTimestamp", "mode": "value", "reason": "time when Grafana registered the check type at startup" },
+    { "route": "GET /apis/advisor.grafana.app/v0alpha1/namespaces/*/checktypes/*", "path": "metadata.managedFields.*.time", "mode": "value", "reason": "time when Grafana registered the check type at startup" },
+    { "route": "POST /ofrep/v1/evaluate/flags", "path": "flags.*.key", "mode": "value", "reason": "Go map order is random in Grafana, so the array order differs between calls" },
+    { "route": "POST /ofrep/v1/evaluate/flags", "path": "flags.*.value", "mode": "any", "reason": "Go map order is random in Grafana, so the array order differs between calls" }
   ]
 }
