@@ -1,0 +1,11 @@
+[package]
+name = "store-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+grafana = { path = "../grafana" }
+json = { path = "../json" }
+crypto = { path = "../crypto" }
+rusqlite = { version = "=0.42.0", features = ["bundled"] }
