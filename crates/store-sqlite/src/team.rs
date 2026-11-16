@@ -24,4 +24,7 @@ impl TeamStore for SqliteStore {
             rows.collect()
         })
     }
+    fn team_by_id(&self, org_id: i64, id: i64) -> SResult<Team> {
+        self.db(|c| c.prepare(&format!("{SEL} WHERE t.org_id = ?1 AND t.id = ?2"))?.query_row(params![org_id, id], row))
+    }
 }
