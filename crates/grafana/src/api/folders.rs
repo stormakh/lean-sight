@@ -389,7 +389,7 @@ fn k8s_list(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     let fields = c.req.query_get("fieldSelector").unwrap_or_default();
     let parent = k8s::selector_value(&labels, "grafana.app/folder").or(k8s::selector_value(&fields, "metadata.parent"));
     let mut all = c.app.store.folders(c.user.org_id)?;
-    all.sort_by(|a, b| a.uid.cmp(&b.uid));
+    json::sort::sort_by(&mut all, |a, b| a.uid.cmp(&b.uid));
     let mut items = Json::arr();
     let mut next = String::new();
     let mut n = 0;

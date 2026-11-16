@@ -467,7 +467,7 @@ fn unstar_dashboard(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
 /// A Kubernetes `Stars` object for the user (legacy asStarsResource).
 fn stars_object(c: &Ctx<'_>, names: &[String]) -> Json {
     let mut sorted: Vec<String> = names.to_vec();
-    sorted.sort();
+    json::sort::sort(&mut sorted);
     let mut n = Json::arr();
     for s in sorted.iter() {
         n.push(Json::Str(s.clone()));

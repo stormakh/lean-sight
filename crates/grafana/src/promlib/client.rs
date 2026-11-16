@@ -74,7 +74,7 @@ pub fn query_escape(s: &str, out: &mut String) {
 /// Go `url.Values.Encode`: keys sorted (stable for equal keys), `k=v` joined by `&`.
 pub fn encode_values(v: &[(String, String)]) -> String {
     let mut idx: Vec<usize> = (0..v.len()).collect();
-    idx.sort_by(|a, b| v[*a].0.cmp(&v[*b].0));
+    json::sort::sort_by(&mut idx, |a, b| v[*a].0.cmp(&v[*b].0));
     let mut out = String::new();
     for (n, i) in idx.iter().enumerate() {
         if n > 0 {

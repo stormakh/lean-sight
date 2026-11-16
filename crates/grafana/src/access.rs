@@ -13,7 +13,7 @@ pub fn actions(u: &SignedInUser) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = base.to_vec();
     if u.is_grafana_admin {
         out.extend_from_slice(SERVER_ADMIN);
-        out.sort_unstable();
+        json::sort::sort(&mut out);
         out.dedup();
     }
     out

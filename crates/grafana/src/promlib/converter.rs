@@ -22,7 +22,7 @@ pub fn go_fmt_v(v: &Json) -> String {
         }
         Json::Obj(o) => {
             let mut idx: Vec<usize> = (0..o.len()).collect();
-            idx.sort_by(|a, b| o[*a].0.cmp(&o[*b].0));
+            json::sort::sort_by(&mut idx, |a, b| o[*a].0.cmp(&o[*b].0));
             let parts: Vec<String> = idx.iter().map(|i| format!("{}:{}", o[*i].0, go_fmt_v(&o[*i].1))).collect();
             format!("map[{}]", parts.join(" "))
         }

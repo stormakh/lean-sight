@@ -343,7 +343,7 @@ pub fn write_sorted(v: &Json, out: &mut String) {
     match v {
         Json::Obj(o) => {
             let mut idx: Vec<usize> = (0..o.len()).collect();
-            idx.sort_by(|a, b| o[*a].0.cmp(&o[*b].0));
+            json::sort::sort_by(&mut idx, |a, b| o[*a].0.cmp(&o[*b].0));
             out.push('{');
             for (n, i) in idx.iter().enumerate() {
                 if n > 0 {

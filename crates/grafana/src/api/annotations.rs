@@ -405,7 +405,7 @@ fn get_tags(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
             }
         }
     }
-    counts.sort_by(|a, b| a.0.cmp(&b.0));
+    json::sort::sort_by(&mut counts, |a, b| a.0.cmp(&b.0));
     let mut tags = Json::arr();
     for (t, n) in counts.into_iter().take(limit.max(0) as usize) {
         tags.push(Json::obj().with("tag", t).with("count", n));

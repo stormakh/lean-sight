@@ -34,7 +34,7 @@ impl Sampler for NoOpSampler {
     }
     fn set_step(&mut self, _step: i64) {}
     fn sample(&mut self) -> Vec<Exemplar> {
-        self.exemplars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        json::sort::sort_by(&mut self.exemplars, |a, b| a.timestamp.cmp(&b.timestamp));
         self.exemplars.clone()
     }
     fn reset(&mut self) {
@@ -77,7 +77,7 @@ impl Sampler for StdDevSampler {
         let sd = self.std_dev();
         let mut out: Vec<Exemplar> = Vec::new();
         for (_, b) in self.buckets.iter_mut() {
-            b.sort_by(|x, y| y.value.partial_cmp(&x.value).unwrap_or(std::cmp::Ordering::Equal));
+            json::sort::sort_by(b, |x, y| y.value.partial_cmp(&x.value).unwrap_or(std::cmp::Ordering::Equal));
             let mut sampled: Vec<Exemplar> = Vec::new();
             for ex in b.iter() {
                 match sampled.last() {
@@ -91,7 +91,7 @@ impl Sampler for StdDevSampler {
             }
             out.extend(sampled);
         }
-        out.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        json::sort::sort_by(&mut out, |a, b| a.timestamp.cmp(&b.timestamp));
         out
     }
     fn reset(&mut self) {

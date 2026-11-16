@@ -240,9 +240,9 @@ fn k8s_search(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         }
     }
     match sort_desc {
-        Some(desc) => hits.sort_by(|a, b| if desc { by_title(b, a) } else { by_title(a, b) }),
-        None if scored => hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| by_title(a, b))),
-        None => hits.sort_by(by_title),
+        Some(desc) => json::sort::sort_by(&mut hits, |a, b| if desc { by_title(b, a) } else { by_title(a, b) }),
+        None if scored => json::sort::sort_by(&mut hits, |a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| by_title(a, b))),
+        None => json::sort::sort_by(&mut hits, by_title),
     }
     let total = hits.len();
     if total == 0 {
@@ -366,7 +366,7 @@ fn legacy_search(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         hits.push(it);
     }
     let desc = c.req.query_get("sort").as_deref() == Some("alpha-desc");
-    hits.sort_by(|a, b| {
+    json::sort::sort_by(&mut hits, |a, b| {
         if a.is_folder != b.is_folder {
             return if a.is_folder { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
         }

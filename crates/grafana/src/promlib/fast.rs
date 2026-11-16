@@ -608,7 +608,7 @@ fn display_name(q: &Query, labels: &[(&str, &str)], has_metric: bool, text: &mut
 #[allow(clippy::too_many_arguments)]
 fn begin(q: &Query, ref_id: &str, rt: &'static str, first_of_answer: bool, has_metric: bool, labels: &mut [(&str, &str)], first: &mut bool, out: &mut Vec<u8>, s: &mut Scratch) -> bool {
     // labels sorted by name, names unique (as a Go map)
-    labels.sort_by(|a, b| a.0.cmp(b.0));
+    json::sort::sort_by(labels, |a, b| a.0.cmp(b.0));
     for w in labels.windows(2) {
         if w[0].0 == w[1].0 {
             return false;

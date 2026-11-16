@@ -76,7 +76,7 @@ fn sorted(v: &Json) -> Json {
     match v {
         Json::Obj(o) => {
             let mut items: Vec<(String, Json)> = o.iter().map(|(k, x)| (k.clone(), sorted(x))).collect();
-            items.sort_by(|a, b| a.0.cmp(&b.0));
+            json::sort::sort_by(&mut items, |a, b| a.0.cmp(&b.0));
             Json::Obj(items)
         }
         Json::Arr(a) => Json::Arr(a.iter().map(sorted).collect()),
@@ -97,7 +97,7 @@ fn dto(c: &Ctx<'_>, ds: &DataSource, access_control: Option<Json>) -> Json {
             }
         }
     }
-    keys.sort();
+    json::sort::sort(&mut keys);
     for k in keys {
         fields.set(&k, true);
     }
@@ -171,7 +171,7 @@ fn list(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         Ok(v) => v,
         Err(_) => return Err(ApiError::new(500, "Failed to query datasources")),
     };
-    all.sort_by_key(|d| d.name.to_lowercase());
+    json::sort::sort_by_key(&mut all, |d| d.name.to_lowercase());
     let mut out = Json::arr();
     for ds in all.iter() {
         let (type_name, logo) = plugin_meta(c.app, &ds.type_);
@@ -851,7 +851,7 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
             }
         }
     }
-    results.sort_by(|a, b| a.0.cmp(&b.0));
+    json::sort::sort_by(&mut results, |a, b| a.0.cmp(&b.0));
     let mut out = String::with_capacity(size);
     out.push_str("{\"results\":{");
     // results are taken one by one, so each written text is freed as soon as it is copied
