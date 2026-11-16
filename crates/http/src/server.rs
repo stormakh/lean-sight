@@ -258,15 +258,6 @@ fn read_line(r: &mut BufReader<TcpStream>, out: &mut Vec<u8>, budget: &mut usize
     }
 }
 
-/// `s.trim()`, skipping the work when `s` starts and ends with a printable ASCII byte (never whitespace).
-fn trim_fast(s: &str) -> &str {
-    let b = s.as_bytes();
-    match (b.first(), b.last()) {
-        (Some(f), Some(l)) if (0x21..0x80).contains(f) && (0x21..0x80).contains(l) => s,
-        _ => s.trim(),
-    }
-}
-
 fn read_request(r: &mut BufReader<TcpStream>, w: &mut TcpStream, cfg: &ServerConfig, remote_ip: &str, line: &mut Vec<u8>) -> Result<Request, ReadErr> {
     let mut budget = cfg.max_header_bytes;
     // skip empty lines before a request line (RFC 7230 3.5)
@@ -312,7 +303,7 @@ fn read_request(r: &mut BufReader<TcpStream>, w: &mut TcpStream, cfg: &ServerCon
             }
         };
         match t.split_once(':') {
-            Some((k, v)) => headers.push((trim_fast(k).to_ascii_lowercase(), trim_fast(v).to_string())),
+            Some((k, v)) => headers.push((crate::trim_fast(k).to_ascii_lowercase(), crate::trim_fast(v).to_string())),
             None => return Err(ReadErr::Status(400)),
         }
     }

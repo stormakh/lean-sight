@@ -100,7 +100,7 @@ impl Request {
     }
     pub fn accepts_gzip(&self) -> bool {
         match self.header("accept-encoding") {
-            Some(v) => v.split(',').any(|p| p.trim().split(';').next().unwrap_or("").trim() == "gzip"),
+            Some(v) => v.split(',').any(|p| trim_fast(trim_fast(p).split(';').next().unwrap_or("")) == "gzip"),
             None => false,
         }
     }
@@ -289,6 +289,15 @@ pub fn reason(status: u16) -> &'static str {
         503 => "Service Unavailable",
         504 => "Gateway Timeout",
         _ => "Unknown",
+    }
+}
+
+/// `s.trim()`, skipping the work when `s` starts and ends with a printable ASCII byte (never whitespace).
+pub(crate) fn trim_fast(s: &str) -> &str {
+    let b = s.as_bytes();
+    match (b.first(), b.last()) {
+        (Some(f), Some(l)) if (0x21..0x80).contains(f) && (0x21..0x80).contains(l) => s,
+        _ => s.trim(),
     }
 }
 
