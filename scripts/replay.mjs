@@ -166,6 +166,10 @@ async function doSeed() {
   const dash = fs.readFileSync(path.join(root, 'bench/dash.json'), 'utf8');
   const d = await call('POST', '/api/dashboards/db', h, dash);
   console.log(`seed: POST /api/dashboards/db -> ${d.status} ${d.text.slice(0, 120)}`);
+  // ui-tour-v1 was recorded on the instance of ui-tour (v2), which had saved dashboard gsshcd "Recorded save"
+  if (!files.some((f) => path.basename(f).startsWith('ui-tour'))) return;
+  const g = await call('POST', '/api/dashboards/db', h, JSON.stringify({ dashboard: { uid: 'gsshcd', title: 'Recorded save', panels: [], schemaVersion: 42 } }));
+  console.log(`seed: POST /api/dashboards/db (gsshcd) -> ${g.status} ${g.text.slice(0, 120)}`);
 }
 
 // ---- main ----
