@@ -62,8 +62,11 @@ impl SqliteStore {
             let _ = std::fs::create_dir_all(dir);
         }
         let conn = Connection::open(path).map_err(map_err)?;
+        // Exclusive locking: this process is the only user of the file, so SQLite takes the file lock once and keeps
+        // the WAL index in heap memory. In the default mode each statement took and dropped shared-memory read
+        // locks (2 fcntl calls per statement). Another process cannot open the database while the server runs.
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=OFF; PRAGMA busy_timeout=5000; PRAGMA cache_size=-1024; PRAGMA temp_store=MEMORY;",
+            "PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=OFF; PRAGMA busy_timeout=5000; PRAGMA cache_size=-1024; PRAGMA temp_store=MEMORY;",
         )
         .map_err(map_err)?;
         // Query planner stability guarantee: plans never depend on bound values. Without it SQLite marks statements
