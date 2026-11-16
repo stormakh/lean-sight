@@ -11,6 +11,7 @@ use crate::error::ApiError;
 use crate::promlib::client::{HttpReq, HttpResp, Instance, TransportError};
 use crate::promlib::frame::{DataResponse, write_sorted};
 use crate::promlib::models::{DataQuery, MS};
+use crate::promlib::querydata::Rendered;
 use crate::promlib::{self, settings};
 use crate::store::{DataSource, StoreError};
 use http::Response;
@@ -791,14 +792,14 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     }
 
     let single = groups.len() == 1;
-    let mut results: Vec<(String, DataResponse)> = Vec::new();
+    let mut results: Vec<(String, Rendered)> = Vec::new();
     for (ds, qs) in groups.iter() {
         if ds.type_ != "prometheus" {
             if single {
                 return Err(errutil(404, "plugin.notRegistered", "Plugin not registered"));
             }
             for q in qs {
-                results.push((q.ref_id.clone(), DataResponse::err("plugin not registered".to_string(), "")));
+                results.push((q.ref_id.clone(), Rendered::Resp(DataResponse::err("plugin not registered".to_string(), ""))));
             }
             continue;
         }
@@ -809,7 +810,7 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
                     return Err(ApiError::new(500, "Query data error"));
                 }
                 for q in qs {
-                    results.push((q.ref_id.clone(), DataResponse::err(e.clone(), "")));
+                    results.push((q.ref_id.clone(), Rendered::Resp(DataResponse::err(e.clone(), ""))));
                 }
                 continue;
             }
@@ -817,27 +818,45 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         let app = c.app;
         let to = inst.timeout_secs;
         let t = |r: &HttpReq| send(app, r, to);
-        results.extend(promlib::querydata::execute(&inst, qs, &t, false));
+        results.extend(promlib::querydata::execute_rendered(&inst, qs, &t, false));
     }
 
     // after the plugin hop: frames always present, each frame carries its refId
     let mut status = 200;
+    let mut size = 64;
     for (ref_id, r) in results.iter_mut() {
-        if r.error.is_some() {
-            status = 400;
-            if r.error_source.is_empty() {
-                r.error_source = crate::promlib::frame::SOURCE_PLUGIN.to_string();
+        match r {
+            Rendered::Json(j) => size += j.len(),
+            Rendered::Resp(r) => {
+                if r.error.is_some() {
+                    status = 400;
+                    if r.error_source.is_empty() {
+                        r.error_source = crate::promlib::frame::SOURCE_PLUGIN.to_string();
+                    }
+                }
+                for f in r.frames_mut().iter_mut() {
+                    if f.ref_id.is_empty() {
+                        f.ref_id = ref_id.clone();
+                    }
+                }
             }
         }
-        let frames = r.frames_mut();
-        for f in frames.iter_mut() {
-            if f.ref_id.is_empty() {
-                f.ref_id = ref_id.clone();
+    }
+    // one fast-path result (a panel query): wrap it in place, no second copy of the frames
+    if results.len() == 1 {
+        if let Some((ref_id, Rendered::Json(_))) = results.first() {
+            let mut prefix = String::from("{\"results\":{");
+            json::write_str(ref_id, &mut prefix);
+            prefix.push(':');
+            if let Some((_, Rendered::Json(mut j))) = results.pop() {
+                j.insert_str(0, &prefix);
+                j.push_str("}}\n");
+                return Ok(Response::json_text(status, j));
             }
         }
     }
     results.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut out = String::with_capacity(4096);
+    let mut out = String::with_capacity(size);
     out.push_str("{\"results\":{");
     for (i, (ref_id, r)) in results.iter().enumerate() {
         if i > 0 {
@@ -845,7 +864,10 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         }
         json::write_str(ref_id, &mut out);
         out.push(':');
-        r.write_json(&mut out);
+        match r {
+            Rendered::Json(j) => out.push_str(j),
+            Rendered::Resp(r) => r.write_json(&mut out),
+        }
     }
     out.push_str("}}\n");
     Ok(Response::json_text(status, out))

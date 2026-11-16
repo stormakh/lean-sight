@@ -81,13 +81,23 @@ pub fn source_from_http_status(s: u16) -> &'static str {
     }
 }
 
-fn run(inst: &Instance, q: &Query, t: Transport<'_>, qt: QueryType) -> DataResponse {
-    let req = match qt {
+fn request(inst: &Instance, q: &Query, qt: QueryType) -> super::client::HttpReq {
+    match qt {
         QueryType::Range => inst.range_request(q),
         QueryType::Instant => inst.instant_request(q),
         QueryType::Exemplar => inst.exemplar_request(q),
-    };
-    let res = match t(&req) {
+    }
+}
+
+fn run(inst: &Instance, q: &Query, t: Transport<'_>, qt: QueryType) -> DataResponse {
+    let res = t(&request(inst, q, qt));
+    convert(q, res, qt)
+}
+
+/// One Prometheus answer (or transport failure) to a data response (`rangeQuery` / `instantQuery` /
+/// `exemplarQuery` after the HTTP call).
+fn convert(q: &Query, res: Result<HttpResp, TransportError>, qt: QueryType) -> DataResponse {
+    let res = match res {
         Ok(r) => r,
         Err(e) => return transport_error(e, qt),
     };
@@ -96,6 +106,70 @@ fn run(inst: &Instance, q: &Query, t: Transport<'_>, qt: QueryType) -> DataRespo
         return DataResponse { frames: None, error: Some(format!("{} {}", res.status, http::reason(res.status))), error_source: source_from_http_status(res.status).to_string(), status: 0 };
     }
     parse_response(q, &res, qt)
+}
+
+/// A query result: already written JSON (the fast path) or a response for the general writer.
+pub enum Rendered {
+    Json(String),
+    Resp(DataResponse),
+}
+
+/// `Execute` for the server: like `execute`, but a plain range/instant query whose answers the fast path accepts
+/// is written straight to JSON (`{"status":200,"frames":[...]}` with `refId` on every frame).
+pub fn execute_rendered(inst: &Instance, queries: &[DataQuery], t: Transport<'_>, from_alert: bool) -> Vec<(String, Rendered)> {
+    let mut out: Vec<(String, Rendered)> = Vec::with_capacity(queries.len());
+    for bq in queries {
+        let r = match models::parse(bq, &inst.opts.time_interval, from_alert) {
+            Err(e) => {
+                let src = if e.contains("not supported by grafana-rs") { SOURCE_PLUGIN } else { SOURCE_DOWNSTREAM };
+                Rendered::Resp(DataResponse::err(e, src))
+            }
+            Ok(q) if q.exemplar_query => Rendered::Resp(fetch(inst, &q, t)),
+            Ok(q) => {
+                let mut answers: Vec<(QueryType, Result<HttpResp, TransportError>)> = Vec::with_capacity(2);
+                if q.instant_query {
+                    answers.push((QueryType::Instant, t(&request(inst, &q, QueryType::Instant))));
+                }
+                if q.range_query {
+                    answers.push((QueryType::Range, t(&request(inst, &q, QueryType::Range))));
+                }
+                render(&q, &bq.ref_id, answers)
+            }
+        };
+        match out.iter().position(|p| p.0 == bq.ref_id) {
+            Some(i) => out[i].1 = r,
+            None => out.push((bq.ref_id.clone(), r)),
+        }
+    }
+    out
+}
+
+fn render(q: &Query, ref_id: &str, answers: Vec<(QueryType, Result<HttpResp, TransportError>)>) -> Rendered {
+    if answers.iter().all(|a| a.1.is_ok()) {
+        let size: usize = answers.iter().map(|a| a.1.as_ref().map(|r| r.body.len()).unwrap_or(0)).sum();
+        let mut s = String::with_capacity(size + size / 2 + 64);
+        s.push_str("{\"status\":200,\"frames\":[");
+        let mut first = true;
+        let mut scratch = super::fast::Scratch::default();
+        let mut ok = true;
+        for (_, a) in answers.iter() {
+            if let Ok(res) = a {
+                if !super::fast::write_frames(q, ref_id, res, &mut first, &mut s, &mut scratch) {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            s.push_str("]}");
+            return Rendered::Json(s);
+        }
+    }
+    let mut dr = DataResponse { frames: Some(Vec::new()), ..Default::default() };
+    for (qt, a) in answers {
+        add_data_response(convert(q, a, qt), &mut dr);
+    }
+    Rendered::Resp(dr)
 }
 
 fn transport_error(e: TransportError, qt: QueryType) -> DataResponse {
@@ -307,7 +381,7 @@ fn metric_name_from_labels(f: &Field) -> String {
 }
 
 /// Go `%q` (strconv.Quote) of a label value.
-fn go_quote_q(v: &str, out: &mut String) {
+pub fn go_quote_q(v: &str, out: &mut String) {
     out.push('"');
     for c in v.chars() {
         match c {
@@ -347,9 +421,11 @@ pub fn get_name(q: &Query, f: &Field) -> String {
             legend = String::new();
         }
     } else if !q.legend_format.is_empty() {
-        let empty = Vec::new();
-        let labels = f.labels.as_ref().unwrap_or(&empty);
-        legend = apply_legend_format(&q.legend_format, labels);
+        let pairs: Vec<(&str, &str)> = match &f.labels {
+            Some(l) => l.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect(),
+            None => Vec::new(),
+        };
+        legend = legend_format(&q.legend_format, &pairs);
     }
     if legend == "{}" {
         return q.expr.clone();
@@ -357,8 +433,8 @@ pub fn get_name(q: &Query, f: &Field) -> String {
     legend
 }
 
-/// `legendFormatRegexp` (`\{\{\s*(.+?)\s*\}\}`) replacement.
-fn apply_legend_format(fmt: &str, labels: &super::frame::Labels) -> String {
+/// `legendFormatRegexp` (`\{\{\s*(.+?)\s*\}\}`) replacement; `labels` sorted by name.
+pub fn legend_format(fmt: &str, labels: &[(&str, &str)]) -> String {
     let b = fmt.as_bytes();
     let mut out = String::with_capacity(fmt.len());
     let mut i = 0;
@@ -380,8 +456,8 @@ fn apply_legend_format(fmt: &str, labels: &super::frame::Labels) -> String {
                     out.push_str(&fmt[last..i]);
                     let inner = fmt[i..end + 2].replacen("{{", "", 1).replacen("}}", "", 1);
                     let name = inner.trim();
-                    if let Some(v) = labels_get(labels, name) {
-                        out.push_str(v);
+                    if let Some(p) = labels.iter().find(|p| p.0 == name) {
+                        out.push_str(p.1);
                     }
                     i = end + 2;
                     last = i;

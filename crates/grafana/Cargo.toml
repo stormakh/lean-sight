@@ -8,3 +8,4 @@ license.workspace = true
 json = { path = "../json" }
 crypto = { path = "../crypto" }
 http = { path = "../http" }
+ryu-js = { version = "=1.0.2", default-features = false, features = ["small"] }

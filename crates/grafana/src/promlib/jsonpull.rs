@@ -163,6 +163,100 @@ impl<'a> Iter<'a> {
         self.err("incomplete string")
     }
 
+    /// The input bytes.
+    pub fn bytes(&self) -> &'a [u8] {
+        self.b
+    }
+
+    /// The span (start, end) of a number token.
+    pub fn number_raw(&mut self) -> R<(usize, usize)> {
+        self.ws();
+        let start = self.pos;
+        let b = self.b;
+        let mut i = start;
+        while i < b.len() && matches!(b[i], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
+            i += 1;
+        }
+        if i == start {
+            return self.err("readNumberAsString: invalid number");
+        }
+        self.pos = i;
+        Ok((start, i))
+    }
+
+    /// The span (start, end) of a string's contents and whether it has escapes.
+    pub fn string_raw(&mut self) -> R<(usize, usize, bool)> {
+        self.string_span()
+    }
+
+    /// A string without escapes, borrowed from the input; None when it has escapes (the caller declines).
+    pub fn read_str_raw(&mut self) -> R<Option<&'a str>> {
+        let (s, e, escaped) = self.string_span()?;
+        if escaped {
+            return Ok(None);
+        }
+        let b: &'a [u8] = self.b;
+        match std::str::from_utf8(&b[s..e]) {
+            Ok(t) => Ok(Some(t)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Like `read_object`, but the key is borrowed. `Some(None)` is a key with escapes.
+    pub fn read_object_raw(&mut self) -> R<Option<Option<&'a str>>> {
+        let first = match self.peek() {
+            Some(b'{') => {
+                self.pos += 1;
+                if self.peek() == Some(b'}') {
+                    self.pos += 1;
+                    return Ok(None);
+                }
+                true
+            }
+            Some(b',') => {
+                self.pos += 1;
+                false
+            }
+            Some(b'}') => {
+                self.pos += 1;
+                return Ok(None);
+            }
+            Some(b'n') => {
+                self.expect_lit(b"null")?;
+                return Ok(None);
+            }
+            _ => return self.err("ReadObject: expect { or , or } or n"),
+        };
+        let _ = first;
+        if self.peek() != Some(b'"') {
+            return self.err("ReadObject: expect \" after {");
+        }
+        let k = self.read_str_raw()?;
+        if self.peek() != Some(b':') {
+            return self.err("ReadObject: expect :");
+        }
+        self.pos += 1;
+        Ok(Some(k))
+    }
+
+    /// A JSON number that is a whole number of seconds, or seconds with a fraction, as Unix nanoseconds truncated
+    /// to milliseconds exactly as `timeFromFloat(f)` (float math for fractions, exact for integers).
+    pub fn read_time(&mut self) -> R<i64> {
+        let t = self.number_span()?;
+        let b = t.as_bytes();
+        if !b.is_empty() && b.len() <= 10 && b.iter().all(|c| c.is_ascii_digit()) && (b.len() < 10 || b[0] < b'9') {
+            let mut v: i64 = 0;
+            for c in b {
+                v = v * 10 + (c - b'0') as i64;
+            }
+            return Ok(v * 1_000_000_000);
+        }
+        match t.parse::<f64>() {
+            Ok(f) => Ok(((f * 1000.0) as i64).wrapping_mul(1_000_000)),
+            Err(_) => Err(format!("ReadFloat64: invalid number {t}")),
+        }
+    }
+
     pub fn read_string(&mut self) -> R<String> {
         if self.peek() == Some(b'n') {
             self.expect_lit(b"null")?;

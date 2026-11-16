@@ -4,7 +4,6 @@
 //! their omitempty rules, and maps (labels, `meta.custom`) with sorted keys as `ConfigCompatibleWithStandardLibrary`.
 //! The JSON is written as text straight from the columns (no tree).
 use json::Json;
-use std::fmt::Write;
 
 /// Column values. Times are Unix nanoseconds (Go `time.Time`).
 #[derive(Debug, Clone, PartialEq)]
@@ -255,21 +254,39 @@ impl DataResponse {
 
 /// Go's float64 JSON text (jsoniter `WriteFloat64` == encoding/json): shortest round-trip digits, 'e' notation
 /// below 1e-6 and from 1e21, exponent without leading zero. The caller handles NaN and infinities.
+/// ECMAScript `Number::toString` (ryu-js) gives the same text for every finite value except -0.
 pub fn write_go_f64(f: f64, out: &mut String) {
     let a = f.abs();
-    if a != 0.0 && (a < 1e-6 || a >= 1e21) {
-        let start = out.len();
-        let _ = write!(out, "{:e}", f);
-        // Rust: "1e-7", "1.5e21"; Go: "1e-07" cleaned to "1e-7", "1.5e+21"
-        if let Some(i) = out[start..].find('e') {
-            let at = start + i + 1;
-            if out.as_bytes().get(at) != Some(&b'-') {
-                out.insert(at, '+');
-            }
+    if a < 1e15 && f == f.trunc() {
+        if f == 0.0 && f.is_sign_negative() {
+            out.push_str("-0");
+        } else {
+            push_i64(f as i64, out);
         }
     } else {
-        let _ = write!(out, "{}", f);
+        let mut b = ryu_js::Buffer::new();
+        out.push_str(b.format(f));
     }
+}
+
+/// Appends `n` in decimal (no allocation).
+pub fn push_i64(n: i64, out: &mut String) {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    let neg = n < 0;
+    let mut u = n.unsigned_abs();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (u % 10) as u8;
+        u /= 10;
+        if u == 0 {
+            break;
+        }
+    }
+    if neg {
+        out.push('-');
+    }
+    out.push_str(std::str::from_utf8(&buf[i..]).unwrap_or(""));
 }
 
 fn write_labels(l: &Labels, out: &mut String) {
@@ -526,7 +543,7 @@ fn write_frame_data(f: &Frame, out: &mut String) {
                         out.push(',');
                     }
                     let t = v.get(i).copied().unwrap_or(0);
-                    json::write_i64(t.div_euclid(1_000_000), out);
+                    push_i64(t.div_euclid(1_000_000), out);
                     let r = t.rem_euclid(1_000_000);
                     if r != 0 {
                         let n = ns.get_or_insert_with(|| vec![0; rows]);

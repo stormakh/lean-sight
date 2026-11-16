@@ -452,11 +452,11 @@ fn read_string_result(it: &mut Iter<'_>) -> DataResponse {
 
 fn read_time_value_pair(it: &mut Iter<'_>) -> R<(i64, f64)> {
     it.read_array()?;
-    let t = it.read_f64()?;
+    let t = it.read_time()?;
     it.read_array()?;
     let v = it.read_f64_string()?;
     it.read_array()?;
-    Ok((time_from_float(t), v))
+    Ok((t, v))
 }
 
 fn read_scalar(it: &mut Iter<'_>) -> DataResponse {

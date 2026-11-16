@@ -5,6 +5,7 @@
 pub mod client;
 pub mod converter;
 pub mod exemplar;
+pub mod fast;
 pub mod frame;
 pub mod jsonpull;
 pub mod models;
