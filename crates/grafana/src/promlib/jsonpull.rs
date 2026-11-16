@@ -17,13 +17,17 @@ pub enum Kind {
 pub struct Iter<'a> {
     b: &'a [u8],
     pub pos: usize,
+    /// Nesting depth of `skip` / `read_any`, bounded so a hostile answer cannot overflow the 64 KB thread stack.
+    depth: u32,
 }
+
+const MAX_DEPTH: u32 = 64;
 
 pub type R<T> = Result<T, String>;
 
 impl<'a> Iter<'a> {
     pub fn new(b: &'a [u8]) -> Iter<'a> {
-        Iter { b, pos: 0 }
+        Iter { b, pos: 0, depth: 0 }
     }
 
     fn ws(&mut self) {
@@ -317,6 +321,16 @@ impl<'a> Iter<'a> {
     }
 
     pub fn skip(&mut self) -> R<()> {
+        if self.depth >= MAX_DEPTH {
+            return self.err("Skip: nesting too deep");
+        }
+        self.depth += 1;
+        let r = self.skip_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn skip_inner(&mut self) -> R<()> {
         match self.what_is_next() {
             Kind::Str => {
                 self.string_span()?;
@@ -361,6 +375,16 @@ impl<'a> Iter<'a> {
 
     /// Any value as a tree (jsoniter `Read`). Numbers become floats, as Go's `any`.
     pub fn read_any(&mut self) -> R<Json> {
+        if self.depth >= MAX_DEPTH {
+            return self.err("Read: nesting too deep");
+        }
+        self.depth += 1;
+        let r = self.read_any_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn read_any_inner(&mut self) -> R<Json> {
         match self.what_is_next() {
             Kind::Str => Ok(Json::Str(self.read_string()?)),
             Kind::Num => Ok(Json::Float(self.read_f64()?)),
