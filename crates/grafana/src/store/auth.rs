@@ -45,6 +45,11 @@ pub trait AuthStore {
     fn token_by_id(&self, id: i64) -> SResult<UserAuthToken>;
     /// Writes every column by id.
     fn token_update(&self, t: &UserAuthToken) -> SResult<()>;
+    /// Marks the current token as seen, only while `hashed` is still the current token (a concurrent rotation wins).
+    fn token_mark_seen(&self, id: i64, hashed: &str, at: i64) -> SResult<()>;
+    /// Rotates the session to `new_hash` (the current token becomes `prev_auth_token`), only while the current token
+    /// is still `expected`. Ok(false): another request rotated it first (upstream errTokenNotRotated).
+    fn token_rotate(&self, id: i64, expected: &str, new_hash: &str, user_agent: &str, client_ip: &str, at: i64) -> SResult<bool>;
     fn token_delete(&self, id: i64) -> SResult<()>;
     /// Sessions of a user that are not revoked, newest first.
     fn tokens_of_user(&self, user_id: i64) -> SResult<Vec<UserAuthToken>>;

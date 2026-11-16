@@ -434,7 +434,7 @@ fn session_auth(app: &App, raw: &str, org_req: i64, req: &Request) -> AuthResult
     if tok.auth_token == hashed && !tok.auth_token_seen {
         tok.auth_token_seen = true;
         tok.seen_at = t;
-        let _ = app.store.token_update(&tok);
+        let _ = app.store.token_mark_seen(tok.id, &hashed, t);
     }
     let rotate_after = if tok.auth_token_seen { cfg.token_rotation_minutes * 60 } else { URGENT_ROTATE_SECS };
     if tok.rotated_at < t - rotate_after {

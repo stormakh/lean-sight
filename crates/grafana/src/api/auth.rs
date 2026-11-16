@@ -121,7 +121,7 @@ fn do_rotate(c: &Ctx<'_>) -> Rotated {
     let raw = http::url_decode(&raw);
     let st = &c.app.store;
     let hashed = authn::hash_token(&cfg.secret_key, &raw);
-    let mut tok = match st.token_by_hash(&hashed) {
+    let tok = match st.token_by_hash(&hashed) {
         Ok(t) => t,
         Err(_) => return Rotated::NotFound,
     };
@@ -135,20 +135,14 @@ fn do_rotate(c: &Ctx<'_>) -> Rotated {
         return Rotated::Ok(resp);
     }
     let new_token = crypto::random_hex(16);
-    tok.prev_auth_token = tok.auth_token.clone();
-    tok.auth_token = authn::hash_token(&cfg.secret_key, &new_token);
-    tok.auth_token_seen = false;
-    tok.seen_at = 0;
-    tok.rotated_at = t;
-    tok.updated_at = t;
-    tok.client_ip = c.req.remote_ip.clone();
-    if let Some(ua) = c.req.header("user-agent") {
-        tok.user_agent = ua.chars().take(200).collect();
+    let ua: String = c.req.header("user-agent").unwrap_or("").chars().take(200).collect();
+    // only while the token we read is still current: of concurrent rotations exactly one wins; the others answer
+    // as a skipped rotation (200, no new cookie), and the client keeps the cookie the winner sets
+    match st.token_rotate(tok.id, &tok.auth_token, &authn::hash_token(&cfg.secret_key, &new_token), &ua, &c.req.remote_ip, t) {
+        Ok(true) => write_session(c, &mut resp, &new_token, t),
+        Ok(false) => {}
+        Err(_) => return Rotated::NotFound,
     }
-    if st.token_update(&tok).is_err() {
-        return Rotated::NotFound;
-    }
-    write_session(c, &mut resp, &new_token, t);
     Rotated::Ok(resp)
 }
 

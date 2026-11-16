@@ -75,6 +75,23 @@ impl AuthStore for SqliteStore {
         })?;
         if n == 0 { Err(StoreError::NotFound) } else { Ok(()) }
     }
+    fn token_mark_seen(&self, id: i64, hashed: &str, at: i64) -> SResult<()> {
+        self.db(|c| {
+            c.prepare_cached("UPDATE user_auth_token SET auth_token_seen = 1, seen_at = ?3 WHERE id = ?1 AND auth_token = ?2 AND auth_token_seen = 0")?
+                .execute(params![id, hashed, at])
+                .map(|_| ())
+        })
+    }
+    fn token_rotate(&self, id: i64, expected: &str, new_hash: &str, user_agent: &str, client_ip: &str, at: i64) -> SResult<bool> {
+        // upstream rotate_token.sql, plus the expected current token so that two concurrent rotations cannot both win
+        let n = self.db(|c| {
+            c.prepare_cached(
+                "UPDATE user_auth_token SET seen_at = 0, user_agent = ?4, client_ip = ?5, prev_auth_token = auth_token, auth_token = ?3, auth_token_seen = 0, rotated_at = ?6, updated_at = ?6 WHERE id = ?1 AND auth_token = ?2",
+            )?
+            .execute(params![id, expected, new_hash, user_agent, client_ip, at])
+        })?;
+        Ok(n > 0)
+    }
     fn token_delete(&self, id: i64) -> SResult<()> {
         self.db(|c| c.execute("DELETE FROM user_auth_token WHERE id = ?1", params![id]).map(|_| ()))
     }

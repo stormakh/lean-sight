@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grafana-rs vs Grafana</title>
+<style>
+:root { --bg:#fbfaf7; --fg:#1d1d1b; --muted:#6b6a65; --line:#e4e1d9; --graf:#d9822b; --old:#9aa7b8; --now:#2f6f4f; --card:#ffffff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#16171a; --fg:#ecebe6; --muted:#9b9a94; --line:#2c2d31; --graf:#e8964a; --old:#6f7c8e; --now:#5fb88a; --card:#1d1e22; } }
+:root[data-theme="dark"] { --bg:#16171a; --fg:#ecebe6; --muted:#9b9a94; --line:#2c2d31; --graf:#e8964a; --old:#6f7c8e; --now:#5fb88a; --card:#1d1e22; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width:920px; margin:0 auto; padding:28px 16px 48px; }
+h1 { font-size:24px; margin:0 0 4px; }
+.sub { color:var(--muted); margin:0 0 20px; }
+.legend { display:flex; gap:18px; flex-wrap:wrap; margin:0 0 18px; font-size:13px; color:var(--muted); }
+.legend span::before { content:""; display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:6px; vertical-align:-1px; background:var(--c); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 16px 10px; margin:0 0 14px; }
+.card h2 { font-size:15px; margin:0 0 2px; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.card h2 .x { font-weight:600; color:var(--now); }
+.goal { font-size:12.5px; color:var(--muted); margin:0 0 10px; }
+.ok { color:var(--now); font-weight:600; } .no { color:var(--graf); font-weight:600; }
+.row { display:grid; grid-template-columns:120px 1fr 92px; align-items:center; gap:10px; margin:5px 0; font-size:13px; }
+.track { height:16px; background:transparent; border-radius:4px; position:relative; }
+.bar { height:100%; border-radius:4px; background:var(--c); min-width:2px; }
+.val { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
+.note { color:var(--muted); font-size:13px; margin-top:22px; }
+table { width:100%; border-collapse:collapse; font-size:13.5px; margin-top:8px; }
+th, td { text-align:right; padding:7px 8px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+th:first-child, td:first-child { text-align:left; }
+th { color:var(--muted); font-weight:500; }
+.wrap { overflow-x:auto; }
+@media (max-width:560px) { .row { grid-template-columns:86px 1fr 78px; } }
+</style>
+</head>
+<body>
+<main>
+<h1>grafana-rs vs Grafana 13.3.1</h1>
+<p class="sub">Same machine, same frozen benchmark (bench/baseline.sh). Bars use a log scale, so a bar 1 step shorter is about 10X less. Lower is better.</p>
+<div class="legend"><span style="--c:var(--graf)">Grafana (default)</span><span style="--c:var(--old)">grafana-rs, first version</span><span style="--c:var(--now)">grafana-rs now</span></div>
+<div id="charts"></div>
+
+<div class="card">
+<h2>Summary</h2>
+<div class="wrap"><table>
+<thead><tr><th>Measure</th><th>Grafana</th><th>grafana-rs first</th><th>grafana-rs now</th><th>Less than Grafana: first → now</th><th>Goal (2X)</th></tr></thead>
+<tbody id="tbl"></tbody>
+</table></div>
+</div>
+
+<p class="note">Numbers from the frozen benchmark run grafana-rs-2x-b (commit 6574994, 16 Nov 2026). CPU is CPU time of the server process tree per request (oha, 5000 requests, 16 at a time). Memory is PSS of the whole process tree: idle after a 2 min warm-up, peak during the load test.</p>
+</main>
+<script>
+const M = [
+  { name:"Idle memory", unit:"MB", g:848, o:5.49, n:3.36, goal:310 },
+  { name:"Peak memory under load", unit:"MB", g:1064, o:7.75, n:5.34, goal:274 },
+  { name:"CPU per request: health", unit:"ms", g:1.248, o:0.034, n:0.014, goal:74 },
+  { name:"CPU per request: search", unit:"ms", g:23.554, o:0.264, n:0.078, goal:178 },
+  { name:"CPU per request: dashboard", unit:"ms", g:25.92, o:0.262, n:0.096, goal:198 },
+  { name:"CPU per request: Prometheus query", unit:"ms", g:37.75, o:0.852, n:0.522, goal:88 },
+];
+const fmt = (v,u) => (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3)) + " " + u;
+const charts = document.getElementById("charts"), tbl = document.getElementById("tbl");
+for (const m of M) {
+  const lo = Math.log10(Math.min(m.n, m.o) / 2), hi = Math.log10(m.g * 1.2);
+  const w = v => Math.max(1, (Math.log10(v) - lo) / (hi - lo) * 100);
+  const xNow = m.g / m.n, xOld = m.g / m.o, met = xNow >= m.goal;
+  const c = document.createElement("div"); c.className = "card";
+  c.innerHTML = `<h2><span>${m.name}</span><span class="x">${xNow.toFixed(0)}X less than Grafana</span></h2>
+    <p class="goal">First version: ${xOld.toFixed(0)}X. Goal: ${m.goal}X. <span class="${met ? "ok" : "no"}">${met ? "Goal met" : "Not met yet"}</span></p>
+    ${[["Grafana", m.g, "var(--graf)"], ["rs first", m.o, "var(--old)"], ["rs now", m.n, "var(--now)"]].map(([l, v, col]) =>
+      `<div class="row"><div>${l}</div><div class="track"><div class="bar" style="--c:${col};width:${w(v)}%"></div></div><div class="val">${fmt(v, m.unit)}</div></div>`).join("")}`;
+  charts.appendChild(c);
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${m.name}</td><td>${fmt(m.g, m.unit)}</td><td>${fmt(m.o, m.unit)}</td><td>${fmt(m.n, m.unit)}</td><td>${xOld.toFixed(0)}X → <b>${xNow.toFixed(0)}X</b></td><td class="${met ? "ok" : "no"}">${m.goal}X ${met ? "✓" : "✗"}</td>`;
+  tbl.appendChild(tr);
+}
+</script>
+</body>
+</html>
