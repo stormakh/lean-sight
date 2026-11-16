@@ -8,11 +8,11 @@
 use crate::app::App;
 use crate::ctx::{Access, Ctx, Role, Routes};
 use crate::error::ApiError;
-use crate::promlib::client::{HttpReq, HttpResp, Instance, TransportError};
+use crate::promlib::client::{forwarded_headers, DsSettings, HttpReq, HttpResp, Instance, TransportError};
 use crate::promlib::frame::{DataResponse, write_sorted};
 use crate::promlib::models::{DataQuery, MS};
 use crate::promlib::querydata::Rendered;
-use crate::promlib::{self, settings};
+use crate::promlib;
 use crate::store::{DataSource, StoreError};
 use http::Response;
 use json::Json;
@@ -517,26 +517,18 @@ pub fn instance(app: &App, ds: &DataSource) -> Result<Arc<Instance>, String> {
             }
         }
     }
-    let opts = settings::parse_prom_options(&ds.json_data).map_err(|e| format!("error reading settings: {e}"))?;
-    let jd = json_data_value(ds);
     let secure = crate::secrets::decrypt_map(&app.cfg.secret_key, &ds.secure_json_data);
-    let mut headers: Vec<(String, String)> = Vec::new();
-    if ds.basic_auth {
-        let pw = secure.str_of("basicAuthPassword");
-        let cred = format!("{}:{}", ds.basic_auth_user, pw);
-        headers.push(("Authorization".to_string(), format!("Basic {}", crypto::base64(cred.as_bytes()))));
-    }
-    for i in 1..100 {
-        let name = jd.str_of(&format!("httpHeaderName{i}")).to_string();
-        if name.is_empty() {
-            break;
-        }
-        let value = secure.str_of(&format!("httpHeaderValue{i}")).to_string();
-        headers.push((name, value));
-    }
     let default_timeout = app.cfg.get_int("dataproxy", "timeout", 30).max(1) as u64;
-    let timeout_secs = if opts.timeout > 0.0 { opts.timeout as u64 } else { default_timeout };
-    let inst = Arc::new(Instance { id: ds.id, uid: ds.uid.clone(), url: ds.url.clone(), opts, headers, timeout_secs });
+    let inst = Arc::new(Instance::new(&DsSettings {
+        id: ds.id,
+        uid: &ds.uid,
+        url: &ds.url,
+        json_data: &ds.json_data,
+        basic_auth: ds.basic_auth,
+        basic_auth_user: &ds.basic_auth_user,
+        secure: Some(&secure),
+        default_timeout_secs: default_timeout,
+    })?);
     if let Ok(mut v) = INSTANCES.lock() {
         v.retain(|e| !(e.org_id == ds.org_id && e.uid == ds.uid));
         if v.len() >= 64 {
@@ -562,8 +554,12 @@ fn host_port(url: &str) -> String {
 }
 
 /// Sends a plugin request with the shared pooled client; errors read as Go's `*url.Error` text.
-pub fn send(app: &App, r: &HttpReq, timeout_secs: u64) -> Result<HttpResp, TransportError> {
-    let hdrs: Vec<(&str, &str)> = r.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+/// `fwd`: the headers of the incoming request that Grafana forwards (`promlib::client::forwarded_headers`).
+pub fn send(app: &App, r: &HttpReq, timeout_secs: u64, fwd: &[(String, String)]) -> Result<HttpResp, TransportError> {
+    let mut hdrs: Vec<(&str, &str)> = r.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    for (k, v) in fwd.iter() {
+        hdrs.push((k.as_str(), v.as_str()));
+    }
     match app.client.request(&r.method, &r.url, &hdrs, &r.body, Duration::from_secs(timeout_secs)) {
         Ok(res) => Ok(HttpResp { status: res.status, headers: res.headers, body: res.body }),
         Err(e) => {
@@ -605,7 +601,8 @@ fn health_by_uid(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         Ok(inst) => {
             let app = c.app;
             let to = inst.timeout_secs;
-            let t = |r: &HttpReq| send(app, r, to);
+            let fwd = forwarded_headers(&c.req.headers);
+            let t = |r: &HttpReq| send(app, r, to, &fwd);
             promlib::check_health(&inst, &t)
         }
         Err(e) => (false, format!("{e} - error getting datasource info"), None),
@@ -631,10 +628,13 @@ fn resource_by_uid(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     }
     let app = c.app;
     let to = inst.timeout_secs;
-    let t = |r: &HttpReq| send(app, r, to);
+    let fwd = forwarded_headers(&c.req.headers);
+    let t = |r: &HttpReq| send(app, r, to, &fwd);
     let body = std::mem::take(&mut c.req.body);
     let cache = c.req.header("x-grafana-cache").map(|v| v.to_string());
-    match promlib::call_resource(&inst, &c.req.method, &path, &c.req.query, &body, cache.as_deref(), &t) {
+    // the CallResourceRequest URL: only its query string is used
+    let url = if c.req.query.is_empty() { String::new() } else { format!("?{}", c.req.query) };
+    match promlib::call_resource(&inst, &c.req.method, &path, &url, &body, cache.as_deref(), &t) {
         Ok(r) => {
             let mut resp = Response::new(r.status);
             resp.body = http::Body::Bytes(r.body);
@@ -678,7 +678,7 @@ fn proxy_by_uid(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         }
     }
     let req = HttpReq { method: c.req.method.clone(), url, headers, body: std::mem::take(&mut c.req.body) };
-    match send(c.app, &req, inst.timeout_secs) {
+    match send(c.app, &req, inst.timeout_secs, &[]) {
         Ok(r) => {
             let mut resp = Response::new(r.status);
             for (k, v) in r.headers.iter() {
@@ -788,6 +788,7 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
 
     let single = groups.len() == 1;
     let mut results: Vec<(String, Rendered)> = Vec::new();
+    let fwd = forwarded_headers(&c.req.headers);
     for (ds, qs) in groups.iter() {
         if ds.type_ != "prometheus" {
             if single {
@@ -812,7 +813,7 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         };
         let app = c.app;
         let to = inst.timeout_secs;
-        let t = |r: &HttpReq| send(app, r, to);
+        let t = |r: &HttpReq| send(app, r, to, &fwd);
         results.extend(promlib::querydata::execute_rendered(&inst, qs, &t, false));
     }
 

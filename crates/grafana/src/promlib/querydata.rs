@@ -81,16 +81,12 @@ pub fn source_from_http_status(s: u16) -> &'static str {
     }
 }
 
-fn request(inst: &Instance, q: &Query, qt: QueryType) -> super::client::HttpReq {
-    match qt {
-        QueryType::Range => inst.range_request(q),
-        QueryType::Instant => inst.instant_request(q),
-        QueryType::Exemplar => inst.exemplar_request(q),
-    }
-}
-
 fn run(inst: &Instance, q: &Query, t: Transport<'_>, qt: QueryType) -> DataResponse {
-    let res = t(&request(inst, q, qt));
+    let res = match qt {
+        QueryType::Range => inst.query_range(q, t),
+        QueryType::Instant => inst.query_instant(q, t),
+        QueryType::Exemplar => inst.query_exemplars(q, t),
+    };
     convert(q, res, qt)
 }
 
@@ -128,10 +124,10 @@ pub fn execute_rendered(inst: &Instance, queries: &[DataQuery], t: Transport<'_>
             Ok(q) => {
                 let mut answers: Vec<(QueryType, Result<HttpResp, TransportError>)> = Vec::with_capacity(2);
                 if q.instant_query {
-                    answers.push((QueryType::Instant, t(&request(inst, &q, QueryType::Instant))));
+                    answers.push((QueryType::Instant, inst.query_instant(&q, t)));
                 }
                 if q.range_query {
-                    answers.push((QueryType::Range, t(&request(inst, &q, QueryType::Range))));
+                    answers.push((QueryType::Range, inst.query_range(&q, t)));
                 }
                 render(&q, &bq.ref_id, answers)
             }

@@ -310,6 +310,36 @@ impl Instance {
         self.query_request("api/v1/query_exemplars", qv)
     }
 
+    /// The plugin's HTTP client: the `force-http-get` middleware (installed when the data source is GET-configured)
+    /// answers a POST with 405 without sending it; anything else goes to the transport.
+    pub fn round_trip(&self, r: &HttpReq, t: Transport<'_>) -> Result<HttpResp, TransportError> {
+        if self.opts.http_method == "GET" && r.method == "POST" {
+            return Ok(HttpResp { status: 405, headers: Vec::new(), body: Vec::new() });
+        }
+        t(r)
+    }
+
+    /// `QueryRange`: builds the request and sends it.
+    pub fn query_range(&self, q: &Query, t: Transport<'_>) -> Result<HttpResp, TransportError> {
+        self.round_trip(&self.range_request(q), t)
+    }
+
+    /// `QueryInstant`: builds the request and sends it.
+    pub fn query_instant(&self, q: &Query, t: Transport<'_>) -> Result<HttpResp, TransportError> {
+        self.round_trip(&self.instant_request(q), t)
+    }
+
+    /// `QueryExemplars`: builds the request and sends it.
+    pub fn query_exemplars(&self, q: &Query, t: Transport<'_>) -> Result<HttpResp, TransportError> {
+        self.round_trip(&self.exemplar_request(q), t)
+    }
+
+    /// `QueryResource(CallResourceRequest{Method, Path, URL, Body})`: the resource path is `path`; only the query
+    /// string of `url` is used (Go `url.Parse(req.URL).RawQuery`).
+    pub fn query_resource(&self, method: &str, path: &str, url: &str, body: &[u8], t: Transport<'_>) -> Result<HttpResp, TransportError> {
+        self.round_trip(&self.resource_request(method, path, raw_query_of(url), body), t)
+    }
+
     /// `QueryResource`: `path` is the resource path, `raw_query` the caller's query string. GET calls go as GET
     /// (a form body is merged into the URL); other calls use the configured method with the body as is.
     pub fn resource_request(&self, method: &str, path: &str, raw_query: &str, body: &[u8]) -> HttpReq {
@@ -336,6 +366,98 @@ impl Instance {
         }
         self.base_request(if m == "GET" { "GET" } else { "POST" }, url, out_body)
     }
+}
+
+/// Go `url.Parse(u).RawQuery`: the text after the first `?`, before a `#`.
+pub fn raw_query_of(url: &str) -> &str {
+    let u = url.split('#').next().unwrap_or("");
+    u.split_once('?').map(|p| p.1).unwrap_or("")
+}
+
+/// The data source settings the plugin instance is built from (`backend.DataSourceInstanceSettings`).
+#[derive(Debug, Clone, Default)]
+pub struct DsSettings<'a> {
+    pub id: i64,
+    pub uid: &'a str,
+    pub url: &'a str,
+    pub json_data: &'a str,
+    pub basic_auth: bool,
+    pub basic_auth_user: &'a str,
+    /// The decrypted secureJsonData (an object; `Json::Null` for none).
+    pub secure: Option<&'a json::Json>,
+    /// `[dataproxy] timeout`: the request deadline when jsonData has no `timeout`.
+    pub default_timeout_secs: u64,
+}
+
+impl Instance {
+    /// `newInstanceSettings`: `ParsePromOptions`, then the SDK HTTP client options (`CreateTransportOptions`): basic
+    /// auth, the custom headers `httpHeaderName<N>` / `httpHeaderValue<N>`, the timeout.
+    pub fn new(s: &DsSettings<'_>) -> Result<Instance, String> {
+        let (opts, warnings) = super::settings::parse_prom_options_logged(s.json_data);
+        for w in warnings.iter() {
+            // log.DefaultLogger.Warn("datasource jsonData value does not match its declared type", ...)
+            eprintln!("grafana-rs: datasource {} jsonData value does not match its declared type: {w}", s.uid);
+        }
+        let opts = opts.map_err(|e| format!("error reading settings: {e}"))?;
+        let jd = if s.json_data.trim().is_empty() { json::Json::obj() } else { json::Json::parse(s.json_data).unwrap_or_else(|_| json::Json::obj()) };
+        let none = json::Json::Null;
+        let secure = s.secure.unwrap_or(&none);
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if s.basic_auth {
+            let cred = format!("{}:{}", s.basic_auth_user, secure.str_of("basicAuthPassword"));
+            headers.push(("Authorization".to_string(), format!("Basic {}", crypto::base64(cred.as_bytes()))));
+        }
+        for i in 1..100 {
+            let name = jd.str_of(&format!("httpHeaderName{i}")).to_string();
+            if name.is_empty() {
+                break;
+            }
+            headers.push((name, secure.str_of(&format!("httpHeaderValue{i}")).to_string()));
+        }
+        let timeout_secs = if opts.timeout > 0.0 { opts.timeout as u64 } else { s.default_timeout_secs.max(1) };
+        Ok(Instance { id: s.id, uid: s.uid.to_string(), url: s.url.to_string(), opts, headers, timeout_secs })
+    }
+}
+
+/// The headers Grafana's TracingHeaderMiddleware copies from the incoming request into the plugin request, which
+/// the plugin's HTTP client forwards to the data source (`ForwardHTTPHeaders: true` in `CreateTransportOptions`).
+/// Grafana's alerting headers (FromAlert, X-Rule-*) are not here: grafana-rs has no alerting.
+pub const FORWARDED_HEADERS: [&str; 10] = [
+    "X-Query-Group-Id",
+    "X-Panel-Id",
+    "X-Dashboard-Uid",
+    "X-Datasource-Uid",
+    "X-Grafana-From-Expr",
+    "X-Grafana-Org-Id",
+    "X-Panel-Plugin-Id",
+    "X-Dashboard-Title",
+    "X-Panel-Title",
+    "X-Grafana-Caller-Id",
+];
+
+/// The forwarded headers present (non-empty) in `incoming`, with Grafana's name and its gRPC-safe value: bytes
+/// outside printable ASCII are percent-encoded (`sanitizeHTTPHeaderValueForGRPC` for UTF-8 values).
+pub fn forwarded_headers(incoming: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for name in FORWARDED_HEADERS.iter() {
+        let v = match incoming.iter().find(|h| h.0.eq_ignore_ascii_case(name)) {
+            Some(h) if !h.1.is_empty() => &h.1,
+            _ => continue,
+        };
+        let mut val = String::with_capacity(v.len());
+        for b in v.bytes() {
+            if (0x20..=0x7e).contains(&b) {
+                val.push(b as char);
+            } else {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                val.push('%');
+                val.push(HEX[(b >> 4) as usize] as char);
+                val.push(HEX[(b & 15) as usize] as char);
+            }
+        }
+        out.push((name.to_string(), val));
+    }
+    out
 }
 
 /// `formatTime`: Unix seconds with the fraction, as `strconv.FormatFloat(f, 'f', -1, 64)`.

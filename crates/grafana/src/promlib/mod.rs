@@ -12,7 +12,7 @@ pub mod models;
 pub mod querydata;
 pub mod settings;
 
-use client::{HttpReq, HttpResp, Instance, Transport};
+use client::{HttpResp, Instance, Transport};
 use json::Json;
 
 /// `healthcheck` + `getHeuristics`: (ok, message, details). Upstream `CheckHealth`.
@@ -34,17 +34,40 @@ pub fn check_health(inst: &Instance, t: Transport<'_>) -> (bool, String, Option<
     (ok, message, details)
 }
 
-/// `getHeuristics`: Prometheus when buildinfo has no `features`, else Mimir with the ruler API.
+/// `getHeuristics`: Prometheus when buildinfo has no `features`, else Mimir with the ruler API. None when
+/// `getBuildInfo` fails (transport error, a status other than 200, or JSON that does not fit `BuildInfoResponse`).
 pub fn heuristics(inst: &Instance, t: Transport<'_>) -> Option<Json> {
-    let req = inst.resource_request("GET", "api/v1/status/buildinfo", "", &[]);
-    let res = t(&req).ok()?;
+    // getBuildInfo: Execute(CallResourceRequest{Path: "api/v1/status/buildinfo", Method: GET}), so always GET
+    let res = call_resource(inst, "GET", "api/v1/status/buildinfo", "", &[], None, t).ok()?;
     if res.status != 200 {
         return None;
     }
     let v = Json::parse_bytes(&res.body).ok()?;
-    let features = match v.path("data.features") {
-        Some(Json::Obj(o)) => o.len(),
-        _ => 0,
+    // json.Unmarshal into BuildInfoResponse: status and the data strings must be strings, features a string map
+    let str_or_null = |x: Option<&Json>| matches!(x, None | Some(Json::Null) | Some(Json::Str(_)));
+    if !matches!(v, Json::Obj(_)) || !str_or_null(v.get("status")) {
+        return None;
+    }
+    let features = match v.get("data") {
+        None | Some(Json::Null) => 0,
+        Some(d @ Json::Obj(_)) => {
+            for k in ["version", "revision", "branch", "buildUser", "buildDate", "goVersion"] {
+                if !str_or_null(d.get(k)) {
+                    return None;
+                }
+            }
+            match d.get("features") {
+                None | Some(Json::Null) => 0,
+                Some(Json::Obj(o)) => {
+                    if !o.iter().all(|e| matches!(e.1, Json::Str(_) | Json::Null)) {
+                        return None;
+                    }
+                    o.len()
+                }
+                Some(_) => return None,
+            }
+        }
+        Some(_) => return None,
     };
     let (app, ruler) = if features == 0 { ("Prometheus", false) } else { ("Mimir", true) };
     Some(Json::obj().with("application", app).with("features", Json::obj().with("rulerApiEnabled", ruler)))
@@ -76,9 +99,10 @@ pub struct ResourceResponse {
     pub body: Vec<u8>,
 }
 
-/// `Resource.Execute` for a path that is not `suggestions`. `cache` is the caller's `X-Grafana-Cache` header:
-/// when set, the answer carries `X-Grafana-Cache: y` and `Cache-Control: <cache>`.
-pub fn call_resource(inst: &Instance, method: &str, path: &str, raw_query: &str, body: &[u8], cache: Option<&str>, t: Transport<'_>) -> Result<ResourceResponse, String> {
+/// `Resource.Execute` for a path that is not `suggestions`: `path` and `url` are those of the
+/// `CallResourceRequest` (only the query string of `url` is used). `cache` is the caller's `X-Grafana-Cache`
+/// header: when set, the answer carries `X-Grafana-Cache: y` and `Cache-Control: <cache>`.
+pub fn call_resource(inst: &Instance, method: &str, path: &str, url: &str, body: &[u8], cache: Option<&str>, t: Transport<'_>) -> Result<ResourceResponse, String> {
     if !is_allowed_resource_path(path) {
         return Ok(ResourceResponse {
             status: 403,
@@ -86,8 +110,7 @@ pub fn call_resource(inst: &Instance, method: &str, path: &str, raw_query: &str,
             body: b"{\"message\":\"the requested resource path is not supported by this datasource\"}".to_vec(),
         });
     }
-    let req: HttpReq = inst.resource_request(method, path, raw_query, body);
-    let res: HttpResp = match t(&req) {
+    let res: HttpResp = match inst.query_resource(method, path, url, body, t) {
         Ok(r) => r,
         Err(e) => return Err(format!("error querying resource: {}", e.message)),
     };
