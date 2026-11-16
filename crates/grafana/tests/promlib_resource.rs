@@ -129,28 +129,35 @@ fn rejected_encoded_dot_dot() {
 }
 
 // resource/resource_test.go: TestNewResource, TestResource_Execute, TestResource_ExecuteRejectsDisallowedPath
-fn resource_instance() -> grafana::promlib::client::Instance {
-    grafana::promlib::client::Instance { url: "http://localhost:9090".to_string(), opts: grafana::promlib::settings::parse_prom_options("{}").expect("options"), timeout_secs: 30, ..Default::default() }
+use grafana::promlib::client::{DsSettings, HttpReq, HttpResp, Instance, TransportError};
+
+/// `setup()` + `newResource`: settings {ID: 1, URL: "http://mock-server", JSONData: {}} through the constructor.
+fn new_resource_instance() -> Result<Instance, String> {
+    Instance::new(&DsSettings { id: 1, url: "http://mock-server", json_data: "{}", default_timeout_secs: 30, ..Default::default() })
 }
 
-fn ok_transport(_r: &grafana::promlib::client::HttpReq) -> Result<grafana::promlib::client::HttpResp, grafana::promlib::client::TransportError> {
-    Ok(grafana::promlib::client::HttpResp { status: 200, headers: Vec::new(), body: b"{}".to_vec() })
+/// `mockRoundTripper` with `setup()`'s response: 200 `{"message": "success"}`.
+fn mock_round_tripper(_r: &HttpReq) -> Result<HttpResp, TransportError> {
+    Ok(HttpResp { status: 200, headers: Vec::new(), body: br#"{"message": "success"}"#.to_vec() })
 }
 
 #[test]
 fn new_resource() {
-    let inst = resource_instance();
-    assert_eq!(inst.url, "http://localhost:9090");
+    let res = new_resource_instance();
+    assert!(res.is_ok(), "{res:?}");
 }
 
 #[test]
 fn resource_execute() {
-    let r = grafana::promlib::call_resource(&resource_instance(), "", "/api/v1/labels", "", &[], None, &ok_transport).expect("response");
-    assert_eq!(r.status, 200);
+    let res = new_resource_instance().expect("resource");
+    let resp = grafana::promlib::call_resource(&res, "", "/api/v1/labels", "/api/v1/labels", &[], None, &mock_round_tripper).expect("response");
+    assert_eq!(resp.status, 200);
+    assert_eq!(resp.body, br#"{"message": "success"}"#.to_vec());
 }
 
 #[test]
 fn resource_execute_rejects_disallowed_path() {
-    let r = grafana::promlib::call_resource(&resource_instance(), "", "-/reload", "", &[], None, &ok_transport).expect("response");
-    assert_eq!(r.status, 403);
+    let res = new_resource_instance().expect("resource");
+    let resp = grafana::promlib::call_resource(&res, "", "-/reload", "/-/reload", &[], None, &mock_round_tripper).expect("response");
+    assert_eq!(resp.status, 403);
 }

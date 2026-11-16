@@ -1,14 +1,35 @@
 //! Port of promlib `client/client_test.go` (TestClient) and `middleware/custom_query_params_test.go`
-//! (TestCustomQueryParametersMiddleware). The Rust client builds the request without sending it, so the request
-//! the Go `MockDoer` / round tripper would see is the returned `HttpReq` (or the URL after `apply_middleware`).
-use grafana::promlib::client::{HttpReq, Instance, parse_query};
+//! (TestCustomQueryParametersMiddleware). Like Go's `MockDoer`, the TestClient cases send through a transport that
+//! records the request and answers 200.
+use grafana::promlib::client::{HttpReq, HttpResp, Instance, TransportError, parse_query};
 use grafana::promlib::models::{Query, SEC};
 use grafana::promlib::settings::PromOptions;
+use std::cell::RefCell;
 
 /// `NewClient(doer, method, "http://localhost:9090", "60s")`.
 fn client(method: &str) -> Instance {
     let opts = PromOptions { http_method: method.to_string(), query_timeout: "60s".to_string(), ..Default::default() };
     Instance { url: "http://localhost:9090".to_string(), opts, ..Default::default() }
+}
+
+/// Go `MockDoer`: keeps the request it gets, answers `200 OK`.
+struct MockDoer {
+    req: RefCell<Option<HttpReq>>,
+}
+impl MockDoer {
+    fn new() -> MockDoer {
+        MockDoer { req: RefCell::new(None) }
+    }
+    fn doer(&self) -> impl Fn(&HttpReq) -> Result<HttpResp, TransportError> + '_ {
+        move |r: &HttpReq| {
+            *self.req.borrow_mut() = Some(r.clone());
+            Ok(HttpResp { status: 200, ..Default::default() })
+        }
+    }
+    /// `require.NotNil(t, doer.Req)`, then the request.
+    fn req(&self) -> HttpReq {
+        self.req.borrow().clone().expect("the doer got no request")
+    }
 }
 
 fn header<'a>(r: &'a HttpReq, name: &str) -> &'a str {
@@ -22,8 +43,10 @@ fn raw_query(url: &str) -> &str {
 // TestClient / QueryResource
 #[test]
 fn query_resource_post_configured_client_forwards_post_request_as_post() {
-    let c = client("POST");
-    let r = c.resource_request("POST", "/api/v1/series", "", b"match%5B%5D=ALERTS&start=1655271408&end=1655293008");
+    let doer = MockDoer::new();
+    let res = client("POST").query_resource("POST", "/api/v1/series", "/api/v1/series", b"match%5B%5D=ALERTS&start=1655271408&end=1655293008", &doer.doer());
+    assert!(res.is_ok());
+    let r = doer.req();
     assert_eq!(r.method, "POST");
     assert_eq!(String::from_utf8(r.body).expect("utf8"), "match%5B%5D=ALERTS&start=1655271408&end=1655293008");
     assert_eq!(r.url, "http://localhost:9090/api/v1/series");
@@ -31,8 +54,10 @@ fn query_resource_post_configured_client_forwards_post_request_as_post() {
 
 #[test]
 fn query_resource_get_configured_client_converts_incoming_post_to_get() {
-    let c = client("GET");
-    let r = c.resource_request("POST", "/api/v1/query", "", b"query=up&time=1234567890");
+    let doer = MockDoer::new();
+    let res = client("GET").query_resource("POST", "/api/v1/query", "/api/v1/query", b"query=up&time=1234567890", &doer.doer());
+    assert!(res.is_ok());
+    let r = doer.req();
     assert_eq!(r.method, "GET");
     assert!(raw_query(&r.url).contains("query=up"), "{}", r.url);
     assert!(raw_query(&r.url).contains("time=1234567890"), "{}", r.url);
@@ -40,9 +65,11 @@ fn query_resource_get_configured_client_converts_incoming_post_to_get() {
 
 #[test]
 fn query_resource_get_request_is_always_respected_regardless_of_configured_method() {
-    let c = client("POST");
-    // CallResourceRequest URL "api/v1/series?match%5B%5D=ALERTS&start=1655272558&end=1655294158"
-    let r = c.resource_request("GET", "/api/v1/series", "match%5B%5D=ALERTS&start=1655272558&end=1655294158", &[]);
+    let doer = MockDoer::new();
+    // Go's CallResourceRequest URL has no leading slash here
+    let res = client("POST").query_resource("GET", "/api/v1/series", "api/v1/series?match%5B%5D=ALERTS&start=1655272558&end=1655294158", &[], &doer.doer());
+    assert!(res.is_ok());
+    let r = doer.req();
     assert_eq!(r.method, "GET");
     assert_eq!(r.body, Vec::<u8>::new());
     assert_eq!(r.url, "http://localhost:9090/api/v1/series?match%5B%5D=ALERTS&start=1655272558&end=1655294158");
@@ -50,9 +77,10 @@ fn query_resource_get_request_is_always_respected_regardless_of_configured_metho
 
 #[test]
 fn query_resource_get_configured_client_preserves_existing_query_params_when_converting_post() {
-    let c = client("GET");
-    // CallResourceRequest URL "/api/v1/query?timeout=30"
-    let r = c.resource_request("POST", "/api/v1/query", "timeout=30", b"query=up");
+    let doer = MockDoer::new();
+    let res = client("GET").query_resource("POST", "/api/v1/query", "/api/v1/query?timeout=30", b"query=up", &doer.doer());
+    assert!(res.is_ok());
+    let r = doer.req();
     assert_eq!(r.method, "GET");
     assert!(raw_query(&r.url).contains("timeout=30"), "{}", r.url);
     assert!(raw_query(&r.url).contains("query=up"), "{}", r.url);
@@ -65,7 +93,10 @@ fn range_query() -> Query {
 
 #[test]
 fn query_range_sends_correct_post_query() {
-    let r = client("POST").range_request(&range_query());
+    let doer = MockDoer::new();
+    let res = client("POST").query_range(&range_query(), &doer.doer());
+    assert!(res.is_ok());
+    let r = doer.req();
     assert_eq!(r.method, "POST");
     assert_eq!(header(&r, "Content-Type"), "application/x-www-form-urlencoded");
     assert_eq!(r.body, b"end=1234&query=rate%28ALERTS%7Bjob%3D%22test%22+%5B%24__rate_interval%5D%7D%29&start=0&step=1&timeout=60s".to_vec());
@@ -74,7 +105,10 @@ fn query_range_sends_correct_post_query() {
 
 #[test]
 fn query_range_sends_correct_get_query() {
-    let r = client("GET").range_request(&range_query());
+    let doer = MockDoer::new();
+    let res = client("GET").query_range(&range_query(), &doer.doer());
+    assert!(res.is_ok());
+    let r = doer.req();
     assert_eq!(r.method, "GET");
     assert_eq!(r.body, Vec::<u8>::new());
     assert_eq!(r.url, "http://localhost:9090/api/v1/query_range?end=1234&query=rate%28ALERTS%7Bjob%3D%22test%22+%5B%24__rate_interval%5D%7D%29&start=0&step=1&timeout=60s");
