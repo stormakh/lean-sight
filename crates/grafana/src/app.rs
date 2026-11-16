@@ -81,7 +81,10 @@ impl App {
                 AuthResult::Ok(u) => u,
                 AuthResult::NoCredentials => {
                     if route.access != Access::Optional {
-                        return self.not_authorized(&req, ApiError::unauthorized());
+                        // reqSignedIn without an identity: WriteErrOrFallback(401, "Unauthorized") writes the
+                        // errutil body with "extra" (recorded in api-flows-v1: GET /api/user after logout).
+                        let e = ApiError::raw(401, json::Json::obj().with("extra", json::Json::Null).with("message", "Unauthorized").with("messageId", "auth.unauthorized").with("statusCode", 401).with("traceID", ""));
+                        return self.not_authorized(&req, e);
                     }
                     SignedInUser::nobody()
                 }
