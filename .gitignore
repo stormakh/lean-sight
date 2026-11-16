@@ -6,3 +6,4 @@ bench/run/
 upstream-prometheus/
 data/
 .lust-cache/
+.lust-daemon-*
