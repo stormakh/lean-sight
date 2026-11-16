@@ -5,6 +5,7 @@ pub mod auth;
 pub mod ctx;
 pub mod error;
 pub mod secrets;
+pub mod plugins;
 pub mod seed;
 pub mod settings;
 pub mod store;
