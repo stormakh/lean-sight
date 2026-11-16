@@ -77,6 +77,21 @@ impl DashboardStore for SqliteStore {
             Ok(d)
         })
     }
+    fn dashboard_by_uid_with_logins(&self, org_id: i64, uid: &str) -> SResult<(Dashboard, Option<String>, Option<String>)> {
+        self.db(|c| {
+            let (mut d, cl, ul) = c
+                .prepare_cached(concat!(
+                    "SELECT ",
+                    cols!(),
+                    ", (SELECT CASE WHEN u.is_service_account THEN u.name ELSE u.login END FROM user u WHERE u.id = dashboard.created_by),",
+                    " (SELECT CASE WHEN u.is_service_account THEN u.name ELSE u.login END FROM user u WHERE u.id = dashboard.updated_by)",
+                    " FROM dashboard WHERE org_id = ?1 AND uid = ?2"
+                ))?
+                .query_row(params![org_id, uid], |r| Ok((row(r)?, r.get::<_, Option<String>>(16)?, r.get::<_, Option<String>>(17)?)))?;
+            d.tags = tags_of(c, d.id)?;
+            Ok((d, cl, ul))
+        })
+    }
     fn dashboard_by_id(&self, org_id: i64, id: i64) -> SResult<Dashboard> {
         self.db(|c| {
             let mut d = c.prepare_cached(concat!("SELECT ", cols!(), " FROM dashboard WHERE org_id = ?1 AND id = ?2"))?.query_row(params![org_id, id], row)?;
@@ -134,26 +149,30 @@ impl DashboardStore for SqliteStore {
     }
     fn dashboards(&self, org_id: i64) -> SResult<Vec<DashboardMeta>> {
         self.db(|c| {
-            let mut st = c.prepare_cached("SELECT id, uid, org_id, version, slug, title, folder_uid, created, updated FROM dashboard WHERE org_id = ?1 ORDER BY id")?;
-            let mut list: Vec<DashboardMeta> = st
-                .query_map(params![org_id], |r| {
-                    Ok(DashboardMeta { id: r.get(0)?, uid: r.get(1)?, org_id: r.get(2)?, version: r.get(3)?, slug: r.get(4)?, title: r.get(5)?, folder_uid: r.get(6)?, created: r.get(7)?, updated: r.get(8)?, tags: Vec::new() })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            let mut tst = c.prepare_cached("SELECT dashboard_id, term FROM dashboard_tag WHERE org_id = ?1 ORDER BY dashboard_id, id")?;
-            let tags = tst.query_map(params![org_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-            let mut i = 0;
-            for t in tags {
-                let (id, term) = t?;
-                while i < list.len() && list[i].id < id {
-                    i += 1;
+            // one statement: a row per (dashboard, tag), in dashboard id then tag id order
+            let mut st = c.prepare_cached(
+                "SELECT d.id, d.uid, d.org_id, d.version, d.slug, d.title, d.folder_uid, d.created, d.updated, t.term
+                 FROM dashboard d LEFT JOIN dashboard_tag t ON t.dashboard_id = d.id WHERE d.org_id = ?1 ORDER BY d.id, t.id",
+            )?;
+            let mut rows = st.query(params![org_id])?;
+            let mut list: Vec<DashboardMeta> = Vec::new();
+            while let Some(r) = rows.next()? {
+                let id: i64 = r.get(0)?;
+                if list.last().map(|d| d.id) != Some(id) {
+                    list.push(DashboardMeta { id, uid: r.get(1)?, org_id: r.get(2)?, version: r.get(3)?, slug: r.get(4)?, title: r.get(5)?, folder_uid: r.get(6)?, created: r.get(7)?, updated: r.get(8)?, tags: Vec::new() });
                 }
-                if i < list.len() && list[i].id == id {
-                    list[i].tags.push(term);
+                if let Some(term) = r.get::<_, Option<String>>(9)? {
+                    if let Some(d) = list.last_mut() {
+                        d.tags.push(term);
+                    }
                 }
             }
-            list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
             Ok(list)
+        })
+        .map(|mut list| {
+            // sorted after the connection lock is released
+            list.sort_by_cached_key(|d| d.title.to_lowercase());
+            list
         })
     }
     fn dashboards_full(&self, org_id: i64, after_uid: &str, limit: i64) -> SResult<Vec<Dashboard>> {

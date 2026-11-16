@@ -71,6 +71,9 @@ pub struct SaveDashboard {
 
 pub trait DashboardStore {
     fn dashboard_by_uid(&self, org_id: i64, uid: &str) -> SResult<Dashboard>;
+    /// `dashboard_by_uid` plus the shown login (`user_display_login`) of `created_by` and `updated_by`, None when
+    /// that user does not exist; one query for the dashboard view.
+    fn dashboard_by_uid_with_logins(&self, org_id: i64, uid: &str) -> SResult<(Dashboard, Option<String>, Option<String>)>;
     fn dashboard_by_id(&self, org_id: i64, id: i64) -> SResult<Dashboard>;
     /// Saves (Conflict when a new dashboard's uid or id exists).
     fn dashboard_save(&self, s: &SaveDashboard) -> SResult<()>;

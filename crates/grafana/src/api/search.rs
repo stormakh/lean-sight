@@ -33,10 +33,16 @@ struct Item {
 }
 
 fn items(c: &Ctx<'_>, dashboards: bool, folders: bool) -> Result<Vec<Item>, ApiError> {
+    let list = if folders { Some(c.app.store.folders(c.user.org_id)?) } else { None };
+    items_with(c, dashboards, list.as_deref())
+}
+
+/// `items` with the org's folders already read (None: no folder items).
+fn items_with(c: &Ctx<'_>, dashboards: bool, folders: Option<&[crate::store::Folder]>) -> Result<Vec<Item>, ApiError> {
     let mut out = Vec::new();
-    if folders {
-        for f in c.app.store.folders(c.user.org_id)? {
-            out.push(Item { is_folder: true, id: f.id, uid: f.uid, title: f.title, folder: f.parent_uid, tags: Vec::new(), score: 0.0 });
+    if let Some(list) = folders {
+        for f in list {
+            out.push(Item { is_folder: true, id: f.id, uid: f.uid.clone(), title: f.title.clone(), folder: f.parent_uid.clone(), tags: Vec::new(), score: 0.0 });
         }
     }
     if dashboards {
@@ -336,7 +342,7 @@ fn legacy_search(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     }
     let text = text_query(&c.req.query_get("query").unwrap_or_default());
     let mut hits: Vec<Item> = Vec::new();
-    for it in items(c, want_dash, want_folder)? {
+    for it in items_with(c, want_dash, if want_folder { Some(&folders) } else { None })? {
         if !tags.is_empty() && !tags.iter().all(|t| it.tags.contains(t)) {
             continue;
         }

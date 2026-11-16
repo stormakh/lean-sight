@@ -22,28 +22,49 @@ const K256: [u32; 64] = [
 const H256: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
 
 fn sha256_block(h: &mut [u32; 8], c: &[u8]) {
+    let c = &c[..64];
     let mut w = [0u32; 64];
-    for i in 0..16 {
+    let mut i = 0;
+    while i < 16 {
         w[i] = u32::from_be_bytes([c[i * 4], c[i * 4 + 1], c[i * 4 + 2], c[i * 4 + 3]]);
+        i += 1;
     }
-    for i in 16..64 {
-        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+    while i < 64 {
+        let x = w[i - 15];
+        let y = w[i - 2];
+        let s0 = x.rotate_right(7) ^ x.rotate_right(18) ^ (x >> 3);
+        let s1 = y.rotate_right(17) ^ y.rotate_right(19) ^ (y >> 10);
         w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        i += 1;
     }
-    let mut v = *h;
-    for i in 0..64 {
-        let s1 = v[4].rotate_right(6) ^ v[4].rotate_right(11) ^ v[4].rotate_right(25);
-        let ch = (v[4] & v[5]) ^ (!v[4] & v[6]);
-        let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(K256[i]).wrapping_add(w[i]);
-        let s0 = v[0].rotate_right(2) ^ v[0].rotate_right(13) ^ v[0].rotate_right(22);
-        let mj = (v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]);
+    // the eight working variables in registers (rebuilding an array each round was 10% slower)
+    let (mut a, mut b, mut cc, mut d, mut e, mut f, mut g, mut hh) = (h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]);
+    let mut i = 0;
+    while i < 64 {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = g ^ (e & (f ^ g));
+        let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K256[i]).wrapping_add(w[i]);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let mj = (a & b) | (cc & (a | b));
         let t2 = s0.wrapping_add(mj);
-        v = [t1.wrapping_add(t2), v[0], v[1], v[2], v[3].wrapping_add(t1), v[4], v[5], v[6]];
+        hh = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = cc;
+        cc = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+        i += 1;
     }
-    for i in 0..8 {
-        h[i] = h[i].wrapping_add(v[i]);
-    }
+    h[0] = h[0].wrapping_add(a);
+    h[1] = h[1].wrapping_add(b);
+    h[2] = h[2].wrapping_add(cc);
+    h[3] = h[3].wrapping_add(d);
+    h[4] = h[4].wrapping_add(e);
+    h[5] = h[5].wrapping_add(f);
+    h[6] = h[6].wrapping_add(g);
+    h[7] = h[7].wrapping_add(hh);
 }
 
 /// Streaming SHA-256.

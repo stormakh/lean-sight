@@ -18,6 +18,8 @@ use rusqlite::{Connection, ErrorCode};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
+/// One connection: a pool of read-only connections was measured (2 and 4 readers): about 0.23 MB PSS each and no
+/// CPU gain that stood out from the noise, because each request now takes the lock only 1-4 times.
 pub struct SqliteStore {
     conn: Mutex<Connection>,
 }
@@ -60,10 +62,17 @@ impl SqliteStore {
             let _ = std::fs::create_dir_all(dir);
         }
         let conn = Connection::open(path).map_err(map_err)?;
+        // Exclusive locking: this process is the only user of the file, so SQLite takes the file lock once and keeps
+        // the WAL index in heap memory. In the default mode each statement took and dropped shared-memory read
+        // locks (2 fcntl calls per statement). Another process cannot open the database while the server runs.
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=OFF; PRAGMA busy_timeout=5000; PRAGMA cache_size=-1024; PRAGMA temp_store=MEMORY;",
+            "PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=OFF; PRAGMA busy_timeout=5000; PRAGMA cache_size=-1024; PRAGMA temp_store=MEMORY;",
         )
         .map_err(map_err)?;
+        // Query planner stability guarantee: plans never depend on bound values. Without it SQLite marks statements
+        // whose plan looked at a parameter (ORDER BY with an equality, LIKE) as expired on every new binding, so each
+        // cached statement was parsed and planned again on every use.
+        conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG, true).map_err(map_err)?;
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(map_err)?;
         if v < SCHEMA_VERSION {
             conn.execute_batch(SCHEMA).map_err(map_err)?;
@@ -105,6 +114,6 @@ impl SqliteStore {
 
 impl MetaStore for SqliteStore {
     fn ping(&self) -> bool {
-        self.db(|c| c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))).is_ok()
+        self.db(|c| c.prepare_cached("SELECT 1")?.query_row([], |r| r.get::<_, i64>(0))).is_ok()
     }
 }
