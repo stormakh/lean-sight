@@ -42,7 +42,11 @@ fn plugin_asset(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         return Ok(plain_404());
     }
     let cache = if c.app.cfg.app_mode_development { "max-age=0, must-revalidate, no-cache" } else { "public, max-age=3600" };
-    let root = c.app.cfg.plugins_dir().join(&id);
+    // Core and bundled plugins live outside the plugins dir: use the directory the plugin was loaded from.
+    let root = match c.app.plugins.get(&id) {
+        Some(p) => p.dir.clone(),
+        None => c.app.cfg.plugins_dir().join(&id),
+    };
     match http::staticfile::serve(&c.req, &root, &rel, cache) {
         Some(r) => Ok(r),
         None => Ok(plain_404()),

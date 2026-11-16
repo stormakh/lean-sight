@@ -68,5 +68,60 @@ impl OrgStore for SqliteStore {
             rows.collect()
         })
     }
+    fn org_update_name(&self, id: i64, name: &str) -> SResult<()> {
+        let t = now();
+        let n = self.db(|c| c.execute("UPDATE org SET name = ?2, updated = ?3, version = version + 1 WHERE id = ?1", params![id, name, t]))?;
+        if n == 0 { Err(grafana::StoreError::NotFound) } else { Ok(()) }
+    }
+    fn org_delete(&self, id: i64) -> SResult<()> {
+        self.tx(|c| {
+            let n = c.execute("DELETE FROM org WHERE id = ?1", params![id]).map_err(crate::map_err)?;
+            if n == 0 {
+                return Err(grafana::StoreError::NotFound);
+            }
+            for sql in [
+                "DELETE FROM preferences WHERE org_id = ?1",
+                "DELETE FROM star WHERE org_id = ?1",
+                "DELETE FROM data_source WHERE org_id = ?1",
+                "DELETE FROM dashboard_tag WHERE dashboard_id IN (SELECT id FROM dashboard WHERE org_id = ?1)",
+                "DELETE FROM dashboard_version WHERE dashboard_id IN (SELECT id FROM dashboard WHERE org_id = ?1)",
+                "DELETE FROM dashboard WHERE org_id = ?1",
+                "DELETE FROM folder WHERE org_id = ?1",
+                "DELETE FROM annotation WHERE org_id = ?1",
+                "DELETE FROM api_key WHERE org_id = ?1",
+                "DELETE FROM team_member WHERE org_id = ?1",
+                "DELETE FROM team WHERE org_id = ?1",
+                "DELETE FROM kv_store WHERE org_id = ?1",
+                "DELETE FROM org_user WHERE org_id = ?1",
+                "UPDATE user SET org_id = COALESCE((SELECT ou.org_id FROM org_user ou WHERE ou.user_id = user.id ORDER BY ou.org_id LIMIT 1), 0) WHERE org_id = ?1",
+            ] {
+                c.execute(sql, params![id]).map_err(crate::map_err)?;
+            }
+            Ok(())
+        })
+    }
+    fn org_search(&self, query: &str, limit: i64, offset: i64) -> SResult<(Vec<Org>, i64)> {
+        let like = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        self.db(|c| {
+            let total: i64 = c.query_row("SELECT COUNT(*) FROM org WHERE (?1 = '' OR name LIKE ?2 ESCAPE '\\')", params![query, like], |r| r.get(0))?;
+            let mut st = c.prepare(concat!("SELECT ", cols!(), " FROM org WHERE (?1 = '' OR name LIKE ?2 ESCAPE '\\') ORDER BY name LIMIT ?3 OFFSET ?4"))?;
+            let rows: rusqlite::Result<Vec<Org>> = st.query_map(params![query, like, limit, offset], row)?.collect();
+            Ok((rows?, total))
+        })
+    }
+    fn org_user_remove(&self, org_id: i64, user_id: i64) -> SResult<()> {
+        self.tx(|c| {
+            let n = c.execute("DELETE FROM org_user WHERE org_id = ?1 AND user_id = ?2", params![org_id, user_id]).map_err(crate::map_err)?;
+            if n == 0 {
+                return Err(grafana::StoreError::NotFound);
+            }
+            c.execute(
+                "UPDATE user SET org_id = COALESCE((SELECT ou.org_id FROM org_user ou WHERE ou.user_id = ?2 ORDER BY ou.org_id LIMIT 1), 0) WHERE id = ?2 AND org_id = ?1",
+                params![org_id, user_id],
+            )
+            .map_err(crate::map_err)?;
+            Ok(())
+        })
+    }
 }
 

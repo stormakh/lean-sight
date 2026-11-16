@@ -82,4 +82,23 @@ impl UserStore for SqliteStore {
             Ok((rows?, total))
         })
     }
+    fn user_delete(&self, id: i64) -> SResult<()> {
+        self.tx(|c| {
+            let n = c.execute("DELETE FROM user WHERE id = ?1", params![id]).map_err(crate::map_err)?;
+            if n == 0 {
+                return Err(grafana::StoreError::NotFound);
+            }
+            for sql in [
+                "DELETE FROM org_user WHERE user_id = ?1",
+                "DELETE FROM user_auth_token WHERE user_id = ?1",
+                "DELETE FROM star WHERE user_id = ?1",
+                "DELETE FROM preferences WHERE user_id = ?1",
+                "DELETE FROM team_member WHERE user_id = ?1",
+                "DELETE FROM query_history_star WHERE user_id = ?1",
+            ] {
+                c.execute(sql, params![id]).map_err(crate::map_err)?;
+            }
+            Ok(())
+        })
+    }
 }

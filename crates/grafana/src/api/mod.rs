@@ -6,8 +6,11 @@ pub mod auth;
 pub mod boot;
 pub mod dashboards;
 pub mod datasources;
+pub mod discovery;
 pub mod folders;
 pub mod health;
+pub mod ofrep;
+pub mod plugins;
 pub mod prometheus;
 pub mod public;
 pub mod search;
@@ -22,6 +25,7 @@ pub fn register(r: &mut Routes) {
     boot::routes(r);
     auth::routes(r);
     users::routes(r);
+    plugins::routes(r);
     dashboards::routes(r);
     folders::routes(r);
     search::routes(r);
@@ -29,4 +33,6 @@ pub fn register(r: &mut Routes) {
     prometheus::routes(r);
     annotations::routes(r);
     stubs::routes(r);
+    discovery::routes(r);
+    ofrep::routes(r);
 }

@@ -43,4 +43,6 @@ pub trait UserStore {
     fn user_count(&self) -> SResult<i64>;
     /// Users matching `query` in login, email or name (empty matches all), ordered by login. Returns (page, total).
     fn user_search(&self, query: &str, limit: i64, offset: i64) -> SResult<(Vec<User>, i64)>;
+    /// Deletes a user with its memberships, sessions, stars, preferences and team memberships.
+    fn user_delete(&self, id: i64) -> SResult<()>;
 }

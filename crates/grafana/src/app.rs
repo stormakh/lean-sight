@@ -21,6 +21,8 @@ pub struct App {
     pub index_template: Option<Template>,
     /// Boot data `assets` from the build manifest.
     pub assets: json::Json,
+    /// Plugin metadata, loaded once at startup.
+    pub plugins: crate::plugins::Plugins,
     pub started: Instant,
     pub started_unix: i64,
     /// Requests served, by status class (index 1..5 for 1xx..5xx).
@@ -44,6 +46,7 @@ impl App {
             }
         };
         let assets = crate::api::boot::load_assets(&cfg.home);
+        let plugins = crate::plugins::Plugins::load(&cfg);
         let mut routes = Routes::new();
         crate::api::register(&mut routes);
         App {
@@ -54,6 +57,7 @@ impl App {
             basic_cache: BasicCache::new(),
             index_template,
             assets,
+            plugins,
             started: Instant::now(),
             started_unix: crate::util::now(),
             requests: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
@@ -77,7 +81,10 @@ impl App {
                 AuthResult::Ok(u) => u,
                 AuthResult::NoCredentials => {
                     if route.access != Access::Optional {
-                        return self.not_authorized(&req, ApiError::unauthorized());
+                        // reqSignedIn without an identity: WriteErrOrFallback(401, "Unauthorized") writes the
+                        // errutil body with "extra" (recorded in api-flows-v1: GET /api/user after logout).
+                        let e = ApiError::raw(401, json::Json::obj().with("extra", json::Json::Null).with("message", "Unauthorized").with("messageId", "auth.unauthorized").with("statusCode", 401).with("traceID", ""));
+                        return self.not_authorized(&req, e);
                     }
                     SignedInUser::nobody()
                 }

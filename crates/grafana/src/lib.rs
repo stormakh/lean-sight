@@ -1,10 +1,12 @@
 //! Grafana server logic: settings, the Store interface, authentication, routing context, and the HTTP API.
 pub mod api;
+pub mod access;
 pub mod app;
 pub mod auth;
 pub mod ctx;
 pub mod error;
 pub mod secrets;
+pub mod plugins;
 pub mod seed;
 pub mod settings;
 pub mod store;
