@@ -13,3 +13,7 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"
+
+# SQLite is the biggest part of the binary; its hot paths here are short indexed lookups, so size wins over speed.
+[profile.release.package.libsqlite3-sys]
+opt-level = "s"
