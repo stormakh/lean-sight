@@ -217,10 +217,47 @@ fn series<'a>(q: &Query, ref_id: &str, rt: &'static str, idx: usize, it: &mut It
 }
 
 /// The rest of a `values` array, from its first element: compact samples in a tight loop, others via `sample`.
-#[inline]
+#[inline(never)]
 fn values(it: &mut Iter<'_>, n: &mut usize, out: &mut Vec<u8>, s: &mut Scratch) -> R<()> {
     let b = it.bytes();
+    // time column text of `[1700000000,"0"]` samples, gathered on the stack and copied to `out` in runs
+    let mut tb = [0u8; 512];
+    let mut tl = 0usize;
     loop {
+        let p = it.pos;
+        if *n > 0 && p + 17 <= b.len() {
+            if let Some(t) = zero_sample(&b[p..p + 16]) {
+                if tl + 16 > tb.len() {
+                    out.extend_from_slice(&tb[..tl]);
+                    tl = 0;
+                }
+                // `,` + the 10 digits + `000` (16 bytes stored, 14 kept)
+                let x = (t & TIME_DIGITS) | TIME_FILL;
+                tb[tl..tl + 16].copy_from_slice(&x.to_le_bytes());
+                tl += 14;
+                s.vals.extend_from_slice(b",0");
+                *n += 1;
+                it.pos = p + 16;
+                match b[p + 16] {
+                    b',' => {
+                        it.pos = p + 17;
+                        continue;
+                    }
+                    b']' => {
+                        it.pos = p + 17;
+                        break;
+                    }
+                    _ => {
+                        if !it.read_array()? {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+        out.extend_from_slice(&tb[..tl]);
+        tl = 0;
         match compact_sample(b, it.pos, *n, out, &mut s.vals) {
             Some(p) => {
                 *n += 1;
@@ -243,26 +280,29 @@ fn values(it: &mut Iter<'_>, n: &mut usize, out: &mut Vec<u8>, s: &mut Scratch) 
             return Ok(());
         }
     }
+    out.extend_from_slice(&tb[..tl]);
+    Ok(())
+}
+
+/// Bytes 1 to 10 of a 16-byte window (the time digits).
+const TIME_DIGITS: u128 = ((1u128 << 80) - 1) << 8;
+/// `,` at byte 0 and `000` at bytes 11 to 13.
+const TIME_FILL: u128 = (b',' as u128) | (0x30_30_30u128 << 88);
+
+/// `h` (16 bytes) as a little-endian number when it is a whole sample `[1700000000,"0"]` (10 digits, below
+/// 9000000000, value "0").
+#[inline(always)]
+fn zero_sample(h: &[u8]) -> Option<u128> {
+    if h.len() < 16 || h[0] != b'[' || h[11] != b',' || h[12] != b'"' || h[13] != b'0' || h[14] != b'"' || h[15] != b']' || h[1] >= b'9' || !ten_digits(&h[1..11]) {
+        return None;
+    }
+    Some(u128::from_le_bytes([h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]]))
 }
 
 /// The common sample form `[1700000000,"1.5"]` (whole seconds, a value in Go's JSON float form, no spaces),
 /// read and written in one scan. None (nothing written) for any other form: `sample` handles it.
 #[inline(always)]
 fn compact_sample(b: &[u8], start: usize, n: usize, out: &mut Vec<u8>, vals: &mut Vec<u8>) -> Option<usize> {
-    if start + 16 <= b.len() {
-        let h = &b[start..start + 16];
-        // `[1700000000,"0"]`: the most common sample of all
-        if h[0] == b'[' && h[11] == b',' && h[12] == b'"' && h[13] == b'0' && h[14] == b'"' && h[15] == b']' && h[1] < b'9' && ten_digits(&h[1..11]) {
-            if n > 0 {
-                out.push(b',');
-                vals.push(b',');
-            }
-            out.extend_from_slice(&h[1..11]);
-            out.extend_from_slice(b"000");
-            vals.push(b'0');
-            return Some(start + 16);
-        }
-    }
     let mut i = start;
     if *b.get(i)? != b'[' {
         return None;
