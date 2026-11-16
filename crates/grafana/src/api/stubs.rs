@@ -108,17 +108,20 @@ fn advisor_checks(_c: &mut Ctx<'_>) -> Result<Response, ApiError> {
 }
 
 /// The check types of Grafana 13.3.1, captured from a real instance (`captured/advisor-checktypes.json`). Grafana
-/// registers them at startup, so `pub fn init` (called by `App::new`) gives each a new uid, the startup time, and a
-/// resourceVersion of the startup time in microseconds (with the capture's offsets between the objects).
+/// registers them at startup, so each gets a new uid, the startup time (`pub fn init`, called by `App::new`, keeps
+/// it), and a resourceVersion of the startup time in microseconds (with the capture's offsets between the objects).
+/// The bodies are built on first use.
 pub fn init() {
-    checktypes();
+    START_MS.store(crate::util::now_ms(), std::sync::atomic::Ordering::Relaxed);
 }
+
+static START_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 fn checktypes() -> &'static (String, Vec<(String, String)>) {
     static CT: OnceLock<(String, Vec<(String, String)>)> = OnceLock::new();
     CT.get_or_init(|| {
         let mut list = Json::parse(include_str!("captured/advisor-checktypes.json")).unwrap_or(Json::Null);
-        let now_ms = crate::util::now_ms();
+        let now_ms = START_MS.load(std::sync::atomic::Ordering::Relaxed);
         let start_us = now_ms * 1000;
         let ts = crate::util::rfc3339(now_ms / 1000);
         let rv_of = |m: &Json| m.str_of("resourceVersion").parse::<i64>().unwrap_or(0);
