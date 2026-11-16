@@ -854,14 +854,15 @@ fn ds_query(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     results.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = String::with_capacity(size);
     out.push_str("{\"results\":{");
-    for (i, (ref_id, r)) in results.iter().enumerate() {
+    // results are taken one by one, so each written text is freed as soon as it is copied
+    for (i, (ref_id, r)) in results.into_iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        json::write_str(ref_id, &mut out);
+        json::write_str(&ref_id, &mut out);
         out.push(':');
         match r {
-            Rendered::Json(j) => out.push_str(&String::from_utf8_lossy(j)),
+            Rendered::Json(j) => out.push_str(&String::from_utf8_lossy(&j)),
             Rendered::Resp(r) => r.write_json(&mut out),
         }
     }
