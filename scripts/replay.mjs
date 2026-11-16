@@ -5,8 +5,7 @@
 //
 // The recordings were made with anonymous Admin access (bench/grafana.sh capture-v1), so start the target the same way:
 //   GF_AUTH_ANONYMOUS_ENABLED=true GF_AUTH_ANONYMOUS_ORG_ROLE=Admin target/release/grafana-rs
-// and seed it like the recording (--seed does it, with admin:admin): data source uid prom1 -> http://localhost:9390,
-// dashboard uid bench1 from bench/dash.json.
+// and seed it like the recording (--seed runs bench/seed.sh <target>): data source prom1, dashboard bench1.
 //
 // A row matches when the status is equal and the body matches:
 //   JSON: same value types, same object keys in the same order, equal values, recursively.
@@ -158,14 +157,11 @@ async function call(method, url, headers, body) {
   } finally { clearTimeout(timer); }
 }
 
+// Seeds the target exactly as the recordings were seeded: bench/seed.sh (prom1 and bench1, as admin:admin).
 async function doSeed() {
-  const auth = 'Basic ' + Buffer.from('admin:admin').toString('base64');
-  const h = { authorization: auth, 'content-type': 'application/json' };
-  const ds = await call('POST', '/api/datasources', h, JSON.stringify({ name: 'prometheus', type: 'prometheus', uid: 'prom1', url: 'http://localhost:9390', access: 'proxy', isDefault: true }));
-  console.log(`seed: POST /api/datasources -> ${ds.status} ${ds.text.slice(0, 120)}`);
-  const dash = fs.readFileSync(path.join(root, 'bench/dash.json'), 'utf8');
-  const d = await call('POST', '/api/dashboards/db', h, dash);
-  console.log(`seed: POST /api/dashboards/db -> ${d.status} ${d.text.slice(0, 120)}`);
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync('bash', [path.join(root, 'bench/seed.sh'), target], { encoding: 'utf8' });
+  console.log(`seed: bench/seed.sh ${target} -> exit ${r.status}${(r.stdout + r.stderr).trim() ? ': ' + (r.stdout + r.stderr).trim() : ''}`);
 }
 
 // ---- main ----

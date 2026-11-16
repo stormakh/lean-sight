@@ -205,8 +205,9 @@ node scripts/replay.mjs --seed -v --only /api/datasources        # one area, eve
 rm -rf data && target/release/grafana-rs   # then:  node scripts/replay.mjs --seed tests-data/recordings/api-flows-v1.jsonl
 ```
 
-`--seed` creates data source `prom1` (`POST /api/datasources`) and dashboard `bench1` (`POST /api/dashboards/db`,
-`bench/dash.json`) with admin:admin, so it works once agents A to C have those routes. Matching rules and ignore modes
+`--seed` runs `bench/seed.sh <target>` (data source `prom1` and dashboard `bench1`, as admin:admin, the same seed as the
+recordings), so it works once agents A to C have `POST /api/datasources` and `POST /api/dashboards/db`. The 302 of
+`/logout` and `/profile` is compared as recorded (fetch does not follow redirects). Matching rules and ignore modes
 (`value`, `any`, `map` for generated ids that later URLs use) are at the top of `scripts/replay.mjs`; add exceptions
 to `tests-data/replay-ignore.json` with route, path and reason. Cookies from the target's `Set-Cookie` are replayed on
 rows that had a cookie in the recording. Phase 2 score: ui-tour-v1 0/165, both files 1/242 (every area route is empty).
