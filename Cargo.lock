@@ -83,6 +83,7 @@ name = "grafana"
 version = "0.1.0"
 dependencies = [
  "crypto",
+ "flate2",
  "http",
  "json",
  "ryu-js",

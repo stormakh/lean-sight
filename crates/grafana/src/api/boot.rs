@@ -437,8 +437,8 @@ fn settings_tpl(app: &App) -> &'static SettingsTpl {
     T.get_or_init(|| {
         let mut text = build_static_settings(app).stringify();
         // static plugin sections go in as text
-        text = text.replace(&json::quote("\u{1}panels"), &app.plugins.panels_json);
-        text = text.replace(&json::quote("\u{1}apps"), &app.plugins.apps_json);
+        text = text.replace(&json::quote("\u{1}panels"), &app.plugins.panels_json.text());
+        text = text.replace(&json::quote("\u{1}apps"), &app.plugins.apps_json.text());
         let quoted: Vec<String> = MARKERS.iter().map(|m| json::quote(m)).collect();
         let mut parts = Vec::new();
         let mut rest = text.as_str();
@@ -479,28 +479,12 @@ pub fn namespace(org_id: i64) -> String {
     if org_id == 1 { "default".to_string() } else { format!("org-{org_id}") }
 }
 
-/// The `meta` JSON text of every data source plugin, serialized once.
-fn meta_text<'a>(app: &'a App, id: &str) -> Option<&'a str> {
-    static M: OnceLock<Vec<(String, String)>> = OnceLock::new();
-    let all = M.get_or_init(|| {
-        let mut v = Vec::new();
-        for p in app.plugins.list.iter() {
-            if p.kind == "datasource" {
-                v.push((p.id.clone(), p.ds_meta.stringify()));
-            }
-        }
-        v
-    });
-    let pid = match app.plugins.get(id) {
-        Some(p) => p.id.as_str(),
-        None => id,
-    };
-    for (k, t) in all.iter() {
-        if k == pid {
-            return Some(t.as_str());
-        }
+/// The `meta` JSON text of a data source plugin (by exact id; aliases give None).
+fn meta_text(app: &App, id: &str) -> Option<String> {
+    match app.plugins.get(id) {
+        Some(p) if p.kind == "datasource" => Some(p.ds_meta.text()),
+        _ => None,
     }
-    None
 }
 
 /// getFSDataSources: the org's data sources (by name, Go map order = sorted keys) plus the built-in ones.
@@ -519,7 +503,7 @@ fn write_datasources(c: &Ctx<'_>, out: &mut String) -> String {
                     Some(p) => p.id.clone(),
                     None => ds.type_.clone(),
                 };
-                let module = meta.str_of("module").to_string();
+                let module = meta.ds_module.clone();
                 let url = if ds.access == "proxy" { format!("/api/datasources/proxy/uid/{}", ds.uid) } else { ds.url.clone() };
                 let mut jd = Json::parse(&ds.json_data).unwrap_or(Json::obj());
                 if !matches!(jd, Json::Obj(_)) {
@@ -549,7 +533,7 @@ fn write_datasources(c: &Ctx<'_>, out: &mut String) -> String {
                 if !ds.access.is_empty() {
                     o.set("access", ds.access.as_str());
                 }
-                o.set("preload", meta.bool_of("preload"));
+                o.set("preload", meta.ds_preload);
                 if !module.is_empty() {
                     o.set("module", module.as_str());
                 }
@@ -565,7 +549,7 @@ fn write_datasources(c: &Ctx<'_>, out: &mut String) -> String {
                 if matches!(ds.type_.as_str(), "influxdb" | "elasticsearch") && !ds.database.is_empty() {
                     o.set("database", ds.database.as_str());
                 }
-                let text = o.stringify().replace(&json::quote("\u{1}meta"), meta_text(app, &ds.type_).unwrap_or("null"));
+                let text = o.stringify().replace(&json::quote("\u{1}meta"), meta_text(app, &ds.type_).as_deref().unwrap_or("null"));
                 if ds.is_default {
                     default_ds = ds.name.clone();
                 }
@@ -587,7 +571,7 @@ fn write_datasources(c: &Ctx<'_>, out: &mut String) -> String {
         o.set("jsonData", Json::obj());
         o.set("readOnly", false);
         o.set("cachingConfig", Json::obj().with("enabled", false).with("TTLMs", 0));
-        let text = o.stringify().replace(&json::quote("\u{1}meta"), meta_text(app, &p.id).unwrap_or("null"));
+        let text = o.stringify().replace(&json::quote("\u{1}meta"), meta_text(app, &p.id).as_deref().unwrap_or("null"));
         entries.retain(|e| e.0 != p.name);
         entries.push((p.name.clone(), text));
     }
@@ -1181,7 +1165,7 @@ fn app_navs(app: &App) -> &'static [AppNav] {
             if p.kind != "app" || !p.enabled {
                 continue;
             }
-            let pj = match Json::parse(&p.settings_json) {
+            let pj = match Json::parse(&p.settings_json.text()) {
                 Ok(j) => j,
                 Err(_) => continue,
             };

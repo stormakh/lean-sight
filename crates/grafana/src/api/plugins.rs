@@ -69,7 +69,7 @@ fn get_plugin_list(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         if out.len() > 1 {
             out.push(',');
         }
-        out.push_str(&p.list_head);
+        out.push_str(&p.list_head.text());
         out.push_str(ac_meta);
         out.push_str(",\"angularDetected\":false}");
     }
@@ -97,7 +97,7 @@ fn get_plugin_settings(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     if p.kind == "app" && !c.user.has_role(Role::Viewer) {
         return Err(ApiError::new(403, "Access Denied"));
     }
-    Ok(Response::json_text(200, p.settings_json.clone()))
+    Ok(Response::json_text(200, p.settings_json.text()))
 }
 
 /// `POST /api/plugins/:pluginId/settings` (UpdatePluginSetting). Plugin settings are static in grafana-rs: a request

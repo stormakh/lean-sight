@@ -95,9 +95,10 @@ impl SqliteStore {
         Ok(r)
     }
 
-    /// Frees SQLite's page cache memory (for idle periods).
+    /// Frees SQLite's page cache and the prepared statements (for idle periods; both come back on use).
     pub fn release_memory(&self) {
         let c = self.lock();
+        c.flush_prepared_statement_cache();
         let _ = c.execute_batch("PRAGMA shrink_memory");
     }
 }

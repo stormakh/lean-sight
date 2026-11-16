@@ -39,7 +39,74 @@ pub struct Settings {
     pub app_mode_development: bool,
     pub build_version: String,
     pub build_commit: String,
-    sections: Vec<(String, Vec<(String, String)>)>,
+    sections: Packed,
+}
+
+/// Every raw ini value, packed for a small resident size: one text with all keys and values, and an index.
+/// (A `String` per key and value cost about 3X more heap.) Built once at startup.
+#[derive(Debug, Clone, Default)]
+struct Packed {
+    /// Section names and keys and values, back to back.
+    text: String,
+    /// Per section: name (start, end) in `text`, then its entries `entries[first..first + count]`.
+    sections: Vec<(u32, u32, u32, u32)>,
+    /// Per entry: key start, value start, value end (the key ends where the value starts).
+    entries: Vec<(u32, u32, u32)>,
+}
+impl Packed {
+    fn pack(raw: &[(String, Vec<(String, String)>)]) -> Packed {
+        let mut p = Packed::default();
+        let n: usize = raw.iter().map(|s| s.1.len()).sum();
+        let bytes: usize = raw.iter().map(|s| s.0.len() + s.1.iter().map(|kv| kv.0.len() + kv.1.len()).sum::<usize>()).sum();
+        p.text.reserve_exact(bytes);
+        p.sections.reserve_exact(raw.len());
+        p.entries.reserve_exact(n);
+        for (name, kvs) in raw.iter() {
+            let ns = p.text.len() as u32;
+            p.text.push_str(name);
+            p.sections.push((ns, p.text.len() as u32, p.entries.len() as u32, kvs.len() as u32));
+            for (k, v) in kvs.iter() {
+                let ks = p.text.len() as u32;
+                p.text.push_str(k);
+                let vs = p.text.len() as u32;
+                p.text.push_str(v);
+                p.entries.push((ks, vs, p.text.len() as u32));
+            }
+        }
+        p
+    }
+    fn unpack(&self) -> Vec<(String, Vec<(String, String)>)> {
+        let mut out = Vec::new();
+        for i in 0..self.sections.len() {
+            let name = self.section_name(i).to_string();
+            out.push((name, self.section_entries(i).collect()));
+        }
+        out
+    }
+    fn section_name(&self, i: usize) -> &str {
+        let s = self.sections[i];
+        &self.text[s.0 as usize..s.1 as usize]
+    }
+    fn section_entries(&self, i: usize) -> impl Iterator<Item = (String, String)> + '_ {
+        let s = self.sections[i];
+        self.entries[s.2 as usize..(s.2 + s.3) as usize].iter().map(|e| (self.text[e.0 as usize..e.1 as usize].to_string(), self.text[e.1 as usize..e.2 as usize].to_string()))
+    }
+    fn find_section(&self, section: &str) -> Option<usize> {
+        (0..self.sections.len()).find(|i| self.section_name(*i) == section)
+    }
+    fn get(&self, section: &str, key: &str) -> &str {
+        let i = match self.find_section(section) {
+            Some(i) => i,
+            None => return "",
+        };
+        let s = self.sections[i];
+        for e in self.entries[s.2 as usize..(s.2 + s.3) as usize].iter() {
+            if &self.text[e.0 as usize..e.1 as usize] == key {
+                return &self.text[e.1 as usize..e.2 as usize];
+            }
+        }
+        ""
+    }
 }
 
 /// Parses a Grafana duration: "10m", "6h", "7d", "2w", "1M", "1y", "30s", or a bare number of seconds.
@@ -176,7 +243,7 @@ impl Settings {
             app_mode_development: false,
             build_version: BUILD_VERSION.to_string(),
             build_commit: BUILD_COMMIT.to_string(),
-            sections,
+            sections: Packed::pack(&sections),
         };
         let data = st.get("paths", "data").to_string();
         st.data = if data.starts_with('/') { PathBuf::from(data) } else { home.join(data) };
@@ -228,16 +295,7 @@ impl Settings {
 
     /// Raw value, "" when the key is unknown. Section "" is the top of the file (before any `[section]`).
     pub fn get(&self, section: &str, key: &str) -> &str {
-        for s in self.sections.iter() {
-            if s.0 == section {
-                for kv in s.1.iter() {
-                    if kv.0 == key {
-                        return &kv.1;
-                    }
-                }
-            }
-        }
-        ""
+        self.sections.get(section, key)
     }
     pub fn get_bool(&self, section: &str, key: &str) -> bool {
         let v = self.get(section, key);
@@ -248,16 +306,16 @@ impl Settings {
     }
     /// Sets a value (startup only; settings are read-only once the server runs).
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
-        set_raw(&mut self.sections, section, key, value);
+        let mut raw = self.sections.unpack();
+        set_raw(&mut raw, section, key, value);
+        self.sections = Packed::pack(&raw);
     }
     /// Keys of a section, in file order.
     pub fn section(&self, section: &str) -> Vec<(String, String)> {
-        for s in self.sections.iter() {
-            if s.0 == section {
-                return s.1.clone();
-            }
+        match self.sections.find_section(section) {
+            Some(i) => self.sections.section_entries(i).collect(),
+            None => Vec::new(),
         }
-        Vec::new()
     }
     /// Path of the plugin directory (`[paths] plugins`).
     pub fn plugins_dir(&self) -> PathBuf {

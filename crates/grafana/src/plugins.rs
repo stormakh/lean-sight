@@ -26,9 +26,14 @@ pub struct Plugin {
     pub dir: PathBuf,
     /// Core plugin (from public/app/plugins), signature "internal".
     pub core: bool,
-    /// The `meta` object of a boot-data `settings.datasources` entry (data source plugins only, else Null).
-    /// For built-in data sources (grafana, mixed, dashboard) it is the built-in variant Grafana writes.
-    pub ds_meta: Json,
+    /// The `meta` object of a boot-data `settings.datasources` entry as JSON text (data source plugins only, else
+    /// empty). For built-in data sources (grafana, mixed, dashboard) it is the built-in variant Grafana writes.
+    /// Kept as text, not a `Json` tree: the tree costs several times more memory.
+    pub ds_meta: ZText,
+    /// `module`, `preload` and `aliasIDs` of `ds_meta` (the only fields read from it).
+    pub ds_module: String,
+    pub ds_preload: bool,
+    pub ds_alias_ids: Vec<String>,
     /// `builtIn` in plugin.json (data sources "-- Grafana --", "-- Mixed --", "-- Dashboard --").
     pub builtin: bool,
     /// `info.version`.
@@ -39,9 +44,9 @@ pub struct Plugin {
     /// Static plugin setting: apps are enabled when autoEnabled, every other plugin is enabled.
     pub enabled: bool,
     /// `GET /api/plugins/:id/settings` body.
-    pub settings_json: String,
+    pub settings_json: ZText,
     /// `GET /api/plugins` item without `accessControl`, `angularDetected` and the closing brace.
-    pub list_head: String,
+    pub list_head: ZText,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -49,9 +54,9 @@ pub struct Plugins {
     /// Every loaded plugin, in load order (core, then external, then bundled).
     pub list: Vec<Plugin>,
     /// Boot data `settings.panels` as JSON text (an object keyed by panel id).
-    pub panels_json: String,
+    pub panels_json: ZText,
     /// Boot data `settings.apps` as JSON text (an object keyed by app id).
-    pub apps_json: String,
+    pub apps_json: ZText,
     /// `GET /api/plugins/errors` body: plugins that failed signature validation.
     pub errors_json: String,
     /// Plugin errors: (plugin id, public message), for `GET /api/plugins/:id/settings`.
@@ -158,8 +163,8 @@ impl Plugins {
 
         panels.sort_by(|a, b| a.0.cmp(&b.0));
         apps.sort_by(|a, b| a.0.cmp(&b.0));
-        out.panels_json = Json::Obj(panels).stringify();
-        out.apps_json = Json::Obj(apps).stringify();
+        out.panels_json = ZText::new(&Json::Obj(panels).stringify());
+        out.apps_json = ZText::new(&Json::Obj(apps).stringify());
 
         errors.sort_by(|a, b| a.0.cmp(&b.0));
         let mut ej = Json::arr();
@@ -172,7 +177,7 @@ impl Plugins {
             ej.push(Json::obj().with("errorCode", code).with("pluginId", id.as_str()).with("status", *sig));
             out.errors.push((id.clone(), msg.to_string()));
         }
-        out.errors_json = ej.stringify();
+        out.errors_json = tight(ej.stringify());
 
         let mut idx: Vec<usize> = (0..out.list.len()).collect();
         idx.sort_by(|a, b| out.list[*a].name.cmp(&out.list[*b].name));
@@ -183,21 +188,10 @@ impl Plugins {
         self.list.iter().find(|p| p.id == id)
     }
     /// The boot-data `meta` of a data source plugin type (also matches a plugin's `aliasIDs`).
-    pub fn datasource_meta(&self, id: &str) -> Option<&Json> {
+    pub fn datasource_meta(&self, id: &str) -> Option<&Plugin> {
         match self.get(id) {
-            Some(p) if p.kind == "datasource" => Some(&p.ds_meta),
-            _ => {
-                for p in self.list.iter() {
-                    if p.kind == "datasource" {
-                        if let Some(a) = p.ds_meta.get("aliasIDs").and_then(|a| a.as_arr()) {
-                            if a.iter().any(|v| v.as_str() == Some(id)) {
-                                return Some(&p.ds_meta);
-                            }
-                        }
-                    }
-                }
-                None
-            }
+            Some(p) if p.kind == "datasource" => Some(p),
+            _ => self.list.iter().find(|p| p.kind == "datasource" && p.ds_alias_ids.iter().any(|a| a == id)),
         }
     }
     /// Data source plugins with `builtIn: true` (boot data adds them to `settings.datasources` by name).
@@ -208,6 +202,36 @@ impl Plugins {
     pub fn error_for(&self, id: &str) -> Option<&str> {
         self.errors.iter().find(|e| e.0 == id).map(|e| e.1.as_str())
     }
+}
+
+/// A text kept gzip-compressed: the prebuilt plugin JSON is read rarely (page loads, plugin pages) and
+/// compresses about 6X, which saves about 200 KB of resident memory. `text()` gives back the same bytes.
+#[derive(Debug, Clone, Default)]
+pub struct ZText(Vec<u8>);
+impl ZText {
+    pub fn new(s: &str) -> ZText {
+        use std::io::Write;
+        let mut e = flate2::write::GzEncoder::new(Vec::with_capacity(s.len() / 4 + 16), flate2::Compression::default());
+        if e.write_all(s.as_bytes()).is_err() {
+            return ZText::default();
+        }
+        let mut v = e.finish().unwrap_or_default();
+        v.shrink_to_fit();
+        ZText(v)
+    }
+    pub fn text(&self) -> String {
+        use std::io::Read;
+        let mut out = String::new();
+        let _ = flate2::read::GzDecoder::new(&self.0[..]).read_to_string(&mut out);
+        out
+    }
+}
+
+/// Gives back the spare capacity of a text kept for the life of the process (a JSON writer grows its buffer by
+/// doubling, so the capacity can be up to twice the length).
+fn tight(mut s: String) -> String {
+    s.shrink_to_fit();
+    s
 }
 
 /// Builds the prebuilt texts of one plugin, and its boot-data entry (`settings.panels` or `settings.apps`).
@@ -313,6 +337,17 @@ fn build(f: &Found, id: &str, kind: &str, sig: &str, sig_type: &str, sig_org: &s
     } else {
         Json::Null
     };
+    let ds_module = ds_meta.str_of("module").to_string();
+    let ds_preload = ds_meta.bool_of("preload");
+    let mut ds_alias_ids = Vec::new();
+    if let Some(a) = ds_meta.get("aliasIDs").and_then(|a| a.as_arr()) {
+        for v in a.iter() {
+            if let Some(t) = v.as_str() {
+                ds_alias_ids.push(t.to_string());
+            }
+        }
+    }
+    let ds_meta = if kind == "datasource" { ZText::new(&ds_meta.stringify()) } else { ZText::default() };
 
     // Boot data entry: plugins.PanelDTO (getFSPanels) or plugins.AppDTO (newAppDTO).
     let boot = if kind == "panel" && (state != "alpha" || opts.enable_alpha) {
@@ -366,13 +401,16 @@ fn build(f: &Found, id: &str, kind: &str, sig: &str, sig_type: &str, sig_org: &s
         dir: f.dir.clone(),
         core: f.core,
         ds_meta,
+        ds_module,
+        ds_preload,
+        ds_alias_ids,
         builtin,
         version,
         auto_enabled,
         alpha: state == "alpha",
         enabled,
-        settings_json: s.stringify(),
-        list_head,
+        settings_json: ZText::new(&s.stringify()),
+        list_head: ZText::new(&list_head),
     };
     (p, boot)
 }
