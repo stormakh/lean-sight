@@ -206,11 +206,13 @@ rm -rf data && target/release/grafana-rs   # then:  node scripts/replay.mjs --se
 ```
 
 `--seed` runs `bench/seed.sh <target>` (data source `prom1` and dashboard `bench1`, as admin:admin, the same seed as the
-recordings), so it works once agents A to C have `POST /api/datasources` and `POST /api/dashboards/db`. The 302 of
-`/logout` and `/profile` is compared as recorded (fetch does not follow redirects). Matching rules and ignore modes
-(`value`, `any`, `map` for generated ids that later URLs use) are at the top of `scripts/replay.mjs`; add exceptions
-to `tests-data/replay-ignore.json` with route, path and reason. Cookies from the target's `Set-Cookie` are replayed on
-rows that had a cookie in the recording. Phase 2 score: ui-tour-v1 0/165, both files 1/242 (every area route is empty).
+recordings). Use `--prom http://localhost:9391` with `node scripts/prom-fixture.mjs` running, so data frames compare
+exactly. The scorer is strict (see the top of `scripts/replay.mjs`): its own JSON parser keeps number text, key order
+and duplicate keys; status, Content-Type and Location must match; HTML pages must match line by line, with the boot
+data compared as JSON. Rules in `tests-data/replay-ignore.json` never accept "any value": each one is a typed check
+(`time`, `uid`, `id`, `expect`, `sortBy`, `score`, `maxOf`, `cost`) with a reason, plus named `substitutions` (the
+recording origin and Prometheus URL) and `browserHeaders` (for ui-tour-v1, recorded without User-Agent). Cookies from the
+target's `Set-Cookie` are replayed on rows that had a cookie in the recording. Phase 2 score: ui-tour-v1 0/165, both files 1/242 (every area route is empty).
 
 ### Lust status
 
