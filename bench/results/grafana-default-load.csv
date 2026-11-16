@@ -1,0 +1,5 @@
+label,workload,req_per_s,cpu_ms_per_req,rss_mb_after,p99_ms
+grafana-default,health,5483,1.146,623,18.25
+grafana-default,search,272,26.486,617,125.65
+grafana-default,dashboard,240,27.848,617,154.9
+grafana-default,ds_query,182,39.096,645,150.81
