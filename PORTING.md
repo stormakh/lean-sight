@@ -45,7 +45,7 @@ bench/load.sh <pid> http://localhost:3400 grafana-rs
 - No `async`, no proc macros, no serde, no `unsafe`, edition 2024. Only std and crates with a lust adapter (`~/code/baileys-rs/lust-lang/library/deps`: flate2, indexmap, jiff, memchr, smallvec, rustc-hash, ...).
 - No `dyn` of std traits other than `Fn`, `Any`, `Error`, `Debug`, `Display`. Our own traits (`Store`) as `dyn` are fine.
 - Lust has a stricter lifetime model than rustc. If it rejects a closure that keeps a borrowed argument, use a plain loop.
-- Concurrency: a fixed pool of OS threads (default 4) and blocking I/O. No async runtime.
+- Concurrency: one OS thread per connection, 64 KB stack, at most 256 connections (more wait in accept), keep-alive with a 30 s idle timeout, blocking I/O. Bounded header size, body size, and upstream request time. No async runtime. No timers that wake when idle.
 
 ## Rules
 
