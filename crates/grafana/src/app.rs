@@ -173,7 +173,28 @@ pub fn add_default_headers(path: &str, resp: &mut Response) {
     if path.starts_with("/public/") {
         return;
     }
-    let cachable = path.starts_with("/avatar/") || path.starts_with("/api/datasources/proxy/") || (path.contains("/resources/") && resp.header("cache-control").is_some());
+    add_default_headers_for(PathKind::of(path), resp);
+}
+
+/// What `add_default_headers` needs to know about a path, taken before the request moves into the handler.
+#[derive(Clone, Copy)]
+struct PathKind {
+    public: bool,
+    cachable_prefix: bool,
+    resources: bool,
+}
+impl PathKind {
+    fn of(path: &str) -> PathKind {
+        PathKind {
+            public: path.starts_with("/public/"),
+            cachable_prefix: path.starts_with("/avatar/") || path.starts_with("/api/datasources/proxy/"),
+            resources: path.contains("/resources/"),
+        }
+    }
+}
+
+fn add_default_headers_for(k: PathKind, resp: &mut Response) {
+    let cachable = k.cachable_prefix || (k.resources && resp.header("cache-control").is_some());
     if !cachable {
         resp.set_header("Cache-Control", "no-store");
     }
@@ -184,11 +205,10 @@ pub fn add_default_headers(path: &str, resp: &mut Response) {
 
 impl http::Service for App {
     fn handle(&self, req: Request) -> Response {
-        let static_path = req.path.starts_with("/public/");
-        let path = if static_path { String::new() } else { req.path.clone() };
+        let kind = PathKind::of(&req.path);
         let mut resp = self.dispatch(req);
-        if !static_path {
-            add_default_headers(&path, &mut resp);
+        if !kind.public {
+            add_default_headers_for(kind, &mut resp);
         }
         let class = (resp.status / 100) as usize;
         if class < 6 {

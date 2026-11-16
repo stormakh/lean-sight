@@ -150,13 +150,15 @@ fn serve_conn(stream: TcpStream, cfg: &ServerConfig, svc: &dyn Service) {
     };
     let mut r = BufReader::with_capacity(8 * 1024, rd);
     let mut w = stream;
+    let mut line: Vec<u8> = Vec::with_capacity(256);
+    let mut date = DateCache { secs: -1, text: String::new() };
     loop {
-        let req = match read_request(&mut r, &mut w, cfg, &remote_ip) {
+        let req = match read_request(&mut r, &mut w, cfg, &remote_ip, &mut line) {
             Ok(req) => req,
             Err(ReadErr::Gone) => return,
             Err(ReadErr::Status(code)) => {
                 let resp = Response::text(code, "text/plain; charset=utf-8", format!("{} {}", code, reason(code)));
-                let _ = write_response(&mut w, resp, false, true, false, cfg);
+                let _ = write_response(&mut w, resp, false, true, false, cfg, date.get());
                 return;
             }
         };
@@ -164,15 +166,59 @@ fn serve_conn(stream: TcpStream, cfg: &ServerConfig, svc: &dyn Service) {
         let head = req.method == "HEAD";
         let gz = cfg.gzip && req.accepts_gzip();
         let resp = svc.handle(req);
-        if write_response(&mut w, resp, head, !keep, gz, cfg).is_err() || !keep {
+        if write_response(&mut w, resp, head, !keep, gz, cfg, date.get()).is_err() || !keep {
             return;
         }
+        // do not keep a big line buffer around between requests
+        if line.capacity() > 4096 {
+            line = Vec::with_capacity(256);
+        }
+    }
+}
+
+/// The `Date` header text, formatted once per second per connection.
+struct DateCache {
+    secs: i64,
+    text: String,
+}
+impl DateCache {
+    fn get(&mut self) -> &str {
+        let now = now_unix();
+        if now != self.secs {
+            self.secs = now;
+            self.text = http_date(now);
+        }
+        &self.text
     }
 }
 
 fn keep_alive(req: &Request) -> bool {
     let c = req.header("connection").unwrap_or("");
     if req.http10 { c.eq_ignore_ascii_case("keep-alive") } else { !c.eq_ignore_ascii_case("close") }
+}
+
+/// Index of the first b'\n' in `b`, eight bytes at a time.
+fn find_nl(b: &[u8]) -> Option<usize> {
+    const LO: u64 = 0x0101_0101_0101_0101;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let mut i = 0;
+    while i + 8 <= b.len() {
+        let s = &b[i..i + 8];
+        let x = u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]) ^ (LO * b'\n' as u64);
+        // the lowest set bit marks the first zero byte of x (higher false hits only follow a real one)
+        let t = x.wrapping_sub(LO) & !x & HI;
+        if t != 0 {
+            return Some(i + (t.trailing_zeros() / 8) as usize);
+        }
+        i += 8;
+    }
+    while i < b.len() {
+        if b[i] == b'\n' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Reads one line ending in "\n" into `out`, without the line end, with at most `*budget` bytes.
@@ -187,7 +233,7 @@ fn read_line(r: &mut BufReader<TcpStream>, out: &mut Vec<u8>, budget: &mut usize
             if buf.is_empty() {
                 return Err(ReadErr::Gone);
             }
-            match buf.iter().position(|c| *c == b'\n') {
+            match find_nl(buf) {
                 Some(i) => {
                     out.extend_from_slice(&buf[..i]);
                     (true, i + 1)
@@ -212,17 +258,16 @@ fn read_line(r: &mut BufReader<TcpStream>, out: &mut Vec<u8>, budget: &mut usize
     }
 }
 
-fn read_request(r: &mut BufReader<TcpStream>, w: &mut TcpStream, cfg: &ServerConfig, remote_ip: &str) -> Result<Request, ReadErr> {
+fn read_request(r: &mut BufReader<TcpStream>, w: &mut TcpStream, cfg: &ServerConfig, remote_ip: &str, line: &mut Vec<u8>) -> Result<Request, ReadErr> {
     let mut budget = cfg.max_header_bytes;
-    let mut line = Vec::with_capacity(256);
     // skip empty lines before a request line (RFC 7230 3.5)
     loop {
-        read_line(r, &mut line, &mut budget)?;
+        read_line(r, line, &mut budget)?;
         if !line.is_empty() {
             break;
         }
     }
-    let text = match std::str::from_utf8(&line) {
+    let text = match std::str::from_utf8(line) {
         Ok(t) => t,
         Err(_) => return Err(ReadErr::Status(400)),
     };
@@ -244,13 +289,21 @@ fn read_request(r: &mut BufReader<TcpStream>, w: &mut TcpStream, cfg: &ServerCon
     };
     let mut headers: Vec<(String, String)> = Vec::with_capacity(16);
     loop {
-        read_line(r, &mut line, &mut budget)?;
+        read_line(r, line, &mut budget)?;
         if line.is_empty() {
             break;
         }
-        let t = String::from_utf8_lossy(&line);
+        // from_utf8 first: it is faster than from_utf8_lossy on valid text, with the same result
+        let lossy;
+        let t: &str = match std::str::from_utf8(line) {
+            Ok(t) => t,
+            Err(_) => {
+                lossy = String::from_utf8_lossy(line).into_owned();
+                &lossy
+            }
+        };
         match t.split_once(':') {
-            Some((k, v)) => headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string())),
+            Some((k, v)) => headers.push((crate::trim_fast(k).to_ascii_lowercase(), crate::trim_fast(v).to_string())),
             None => return Err(ReadErr::Status(400)),
         }
     }
@@ -326,15 +379,24 @@ fn read_chunked(r: &mut BufReader<TcpStream>, max: usize) -> Result<Vec<u8>, Rea
     }
 }
 
-fn gzip_bytes(b: &[u8]) -> Option<Vec<u8>> {
-    let mut e = flate2::write::GzEncoder::new(Vec::with_capacity(b.len() / 4 + 64), flate2::Compression::fast());
-    if e.write_all(b).is_err() {
-        return None;
+fn push_num(h: &mut Vec<u8>, mut n: u64) {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
     }
-    e.finish().ok()
+    h.extend_from_slice(&buf[i..]);
 }
 
-fn write_response(w: &mut TcpStream, mut resp: Response, head: bool, close: bool, gz_ok: bool, cfg: &ServerConfig) -> std::io::Result<()> {
+/// Bodies up to this size go out in the same write as the head (one copy, one syscall).
+const COALESCE_BYTES: usize = 64 * 1024;
+
+fn write_response(w: &mut TcpStream, mut resp: Response, head: bool, close: bool, gz_ok: bool, cfg: &ServerConfig, date: &str) -> std::io::Result<()> {
     // gzip
     let no_body = resp.status == 204 || resp.status == 304 || (100..200).contains(&resp.status);
     if gz_ok && !no_body && resp.header("content-encoding").is_none() && compressible(resp.header("content-type").unwrap_or("")) {
@@ -342,14 +404,14 @@ fn write_response(w: &mut TcpStream, mut resp: Response, head: bool, close: bool
         match &mut resp.body {
             Body::Bytes(b) => {
                 if b.len() >= cfg.gzip_min_bytes {
-                    data = gzip_bytes(b);
+                    data = Some(crate::gzip::gzip_vec(b));
                 }
             }
             Body::File(f, len) => {
                 if *len >= cfg.gzip_min_bytes as u64 && *len <= cfg.gzip_max_file_bytes {
                     let mut raw = Vec::with_capacity(*len as usize);
                     if f.read_to_end(&mut raw).is_ok() {
-                        data = gzip_bytes(&raw);
+                        data = Some(crate::gzip::gzip_vec(&raw));
                     }
                 }
             }
@@ -364,50 +426,53 @@ fn write_response(w: &mut TcpStream, mut resp: Response, head: bool, close: bool
         Body::Bytes(b) => b.len() as u64,
         Body::File(_, n) => *n,
     };
-    let mut h = String::with_capacity(256);
-    h.push_str("HTTP/1.1 ");
-    h.push_str(&resp.status.to_string());
-    h.push(' ');
-    h.push_str(reason(resp.status));
-    h.push_str("\r\n");
+    let mut hlen = 64 + date.len();
+    for (k, v) in resp.headers.iter() {
+        hlen += k.len() + v.len() + 4;
+    }
+    let inline = !head && !no_body && matches!(&resp.body, Body::Bytes(b) if b.len() <= COALESCE_BYTES);
+    let mut h: Vec<u8> = Vec::with_capacity(if inline { hlen + len as usize } else { hlen });
+    h.extend_from_slice(b"HTTP/1.1 ");
+    push_num(&mut h, resp.status as u64);
+    h.push(b' ');
+    h.extend_from_slice(reason(resp.status).as_bytes());
+    h.extend_from_slice(b"\r\n");
     for (k, v) in resp.headers.iter() {
         if k.eq_ignore_ascii_case("content-length") {
             continue;
         }
-        h.push_str(k);
-        h.push_str(": ");
-        h.push_str(v);
-        h.push_str("\r\n");
+        h.extend_from_slice(k.as_bytes());
+        h.extend_from_slice(b": ");
+        h.extend_from_slice(v.as_bytes());
+        h.extend_from_slice(b"\r\n");
     }
     if !no_body {
-        h.push_str("Content-Length: ");
-        h.push_str(&len.to_string());
-        h.push_str("\r\n");
+        h.extend_from_slice(b"Content-Length: ");
+        push_num(&mut h, len);
+        h.extend_from_slice(b"\r\n");
     }
-    h.push_str("Date: ");
-    h.push_str(&http_date(now_unix()));
-    h.push_str("\r\n");
+    h.extend_from_slice(b"Date: ");
+    h.extend_from_slice(date.as_bytes());
+    h.extend_from_slice(b"\r\n");
     if close {
-        h.push_str("Connection: close\r\n");
+        h.extend_from_slice(b"Connection: close\r\n");
     }
-    h.push_str("\r\n");
+    h.extend_from_slice(b"\r\n");
     if head || no_body {
-        w.write_all(h.as_bytes())?;
-        return w.flush();
+        return w.write_all(&h);
     }
     match resp.body {
         Body::Bytes(b) => {
-            if b.len() <= 16 * 1024 {
-                let mut all = h.into_bytes();
-                all.extend_from_slice(&b);
-                w.write_all(&all)?;
+            if inline {
+                h.extend_from_slice(&b);
+                w.write_all(&h)?;
             } else {
-                w.write_all(h.as_bytes())?;
+                w.write_all(&h)?;
                 w.write_all(&b)?;
             }
         }
         Body::File(mut f, n) => {
-            w.write_all(h.as_bytes())?;
+            w.write_all(&h)?;
             let mut left = n;
             let mut buf = vec![0u8; 32 * 1024];
             while left > 0 {
@@ -421,5 +486,5 @@ fn write_response(w: &mut TcpStream, mut resp: Response, head: bool, close: bool
             }
         }
     }
-    w.flush()
+    Ok(())
 }
