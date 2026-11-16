@@ -204,20 +204,33 @@ impl Json {
 
     // ---- text ----
     pub fn parse(t: &str) -> Result<Json, JsonError> {
-        Json::parse_bytes(t.as_bytes())
+        parse_text(t.as_bytes(), t)
     }
     pub fn parse_bytes(b: &[u8]) -> Result<Json, JsonError> {
-        let mut p = 0;
-        let v = parse_value(b, &mut p, 0)?;
-        skip_ws(b, &mut p);
-        if p != b.len() {
-            return Err(JsonError { msg: "trailing data after JSON value", offset: p });
+        // Valid UTF-8 (the usual case) is checked once here, so strings slice the text without checking again.
+        // Invalid input keeps the old behavior: each string is decoded lossily.
+        match std::str::from_utf8(b) {
+            Ok(t) => parse_text(b, t),
+            Err(_) => parse_text(b, ""),
         }
-        Ok(v)
     }
+}
+
+/// Parses `b`. `t` is the same text as a str when it is valid UTF-8, or "" when it is not.
+fn parse_text(b: &[u8], t: &str) -> Result<Json, JsonError> {
+    let mut p = 0;
+    let v = parse_value(b, t, &mut p, 0)?;
+    skip_ws(b, &mut p);
+    if p != b.len() {
+        return Err(JsonError { msg: "trailing data after JSON value", offset: p });
+    }
+    Ok(v)
+}
+
+impl Json {
     /// Compact JSON text.
     pub fn stringify(&self) -> String {
-        let mut s = String::new();
+        let mut s = String::with_capacity(128);
         self.write(&mut s);
         s
     }
@@ -259,7 +272,7 @@ impl Json {
     }
     /// Indented JSON text, as Go's `json.MarshalIndent(v, "", indent)`.
     pub fn stringify_pretty(&self, indent: &str) -> String {
-        let mut s = String::new();
+        let mut s = String::with_capacity(128);
         self.write_pretty(&mut s, indent, 0);
         s
     }
@@ -390,7 +403,7 @@ pub fn write_i64(n: i64, out: &mut String) {
         out.push('0');
         return;
     }
-    let mut buf = [0u8; 20];
+    let mut buf = [0u8; 21];
     let mut i = buf.len();
     let neg = n < 0;
     let mut u = n.unsigned_abs();
@@ -400,11 +413,10 @@ pub fn write_i64(n: i64, out: &mut String) {
         u /= 10;
     }
     if neg {
-        out.push('-');
+        i -= 1;
+        buf[i] = b'-';
     }
-    for b in &buf[i..] {
-        out.push(*b as char);
-    }
+    out.push_str(std::str::from_utf8(&buf[i..]).unwrap_or(""));
 }
 
 /// Appends a float64 as Go's encoding/json writes it. NaN and infinities write `null` (Go fails there).
@@ -433,17 +445,43 @@ pub fn write_f64(f: f64, out: &mut String) {
         }
     } else {
         // Rust Display prints the shortest round-trip digits without an exponent; integral values have no ".0".
-        out.push_str(&format!("{}", f));
+        use std::fmt::Write;
+        let _ = write!(out, "{}", f);
     }
 }
 
+/// 1 for bytes that `write_str` must look at: '"', '\\', control bytes, '<', '>', '&', and 0xE2 (the first byte of
+/// U+2028 and U+2029).
+const fn esc_table() -> [u8; 256] {
+    let mut t = [0u8; 256];
+    let mut i = 0;
+    while i < 0x20 {
+        t[i] = 1;
+        i += 1;
+    }
+    t[b'"' as usize] = 1;
+    t[b'\\' as usize] = 1;
+    t[b'<' as usize] = 1;
+    t[b'>' as usize] = 1;
+    t[b'&' as usize] = 1;
+    t[0xE2] = 1;
+    t
+}
+static ESC: [u8; 256] = esc_table();
+
 /// Appends `v` as a JSON string literal with Go's escaping.
 pub fn write_str(v: &str, out: &mut String) {
+    out.reserve(v.len() + 2);
     out.push('"');
     let b = v.as_bytes();
     let mut start = 0;
     let mut i = 0;
     while i < b.len() {
+        // runs of plain bytes are copied at once below
+        if ESC[b[i] as usize] == 0 {
+            i += 1;
+            continue;
+        }
         let c = b[i];
         let esc: Option<&str> = match c {
             b'"' => Some("\\\""),
@@ -503,7 +541,7 @@ fn skip_ws(b: &[u8], p: &mut usize) {
         *p += 1;
     }
 }
-fn parse_value(b: &[u8], p: &mut usize, depth: usize) -> Result<Json, JsonError> {
+fn parse_value(b: &[u8], t: &str, p: &mut usize, depth: usize) -> Result<Json, JsonError> {
     if depth > MAX_DEPTH {
         return Err(err("JSON nested too deep", *p));
     }
@@ -522,13 +560,13 @@ fn parse_value(b: &[u8], p: &mut usize, depth: usize) -> Result<Json, JsonError>
             }
             loop {
                 skip_ws(b, p);
-                let k = parse_str(b, p)?;
+                let k = parse_str(b, t, p)?;
                 skip_ws(b, p);
                 if *p >= b.len() || b[*p] != b':' {
                     return Err(err("expected ':' after object key", *p));
                 }
                 *p += 1;
-                let v = parse_value(b, p, depth + 1)?;
+                let v = parse_value(b, t, p, depth + 1)?;
                 // A repeated key keeps its first position and takes the last value.
                 let mut found = false;
                 for e in o.iter_mut() {
@@ -562,7 +600,7 @@ fn parse_value(b: &[u8], p: &mut usize, depth: usize) -> Result<Json, JsonError>
                 return Ok(Json::Arr(a));
             }
             loop {
-                a.push(parse_value(b, p, depth + 1)?);
+                a.push(parse_value(b, t, p, depth + 1)?);
                 skip_ws(b, p);
                 if *p < b.len() && b[*p] == b',' {
                     *p += 1;
@@ -575,7 +613,7 @@ fn parse_value(b: &[u8], p: &mut usize, depth: usize) -> Result<Json, JsonError>
                 return Err(err("expected ',' or ']' in array", *p));
             }
         }
-        b'"' => Ok(Json::Str(parse_str(b, p)?)),
+        b'"' => Ok(Json::Str(parse_str(b, t, p)?)),
         b't' if b[*p..].starts_with(b"true") => {
             *p += 4;
             Ok(Json::Bool(true))
@@ -588,11 +626,11 @@ fn parse_value(b: &[u8], p: &mut usize, depth: usize) -> Result<Json, JsonError>
             *p += 4;
             Ok(Json::Null)
         }
-        b'-' | b'0'..=b'9' => parse_num(b, p),
+        b'-' | b'0'..=b'9' => parse_num(b, t, p),
         _ => Err(err("invalid character looking for beginning of value", *p)),
     }
 }
-fn parse_num(b: &[u8], p: &mut usize) -> Result<Json, JsonError> {
+fn parse_num(b: &[u8], txt: &str, p: &mut usize) -> Result<Json, JsonError> {
     let s = *p;
     let mut is_float = false;
     if b[*p] == b'-' {
@@ -630,9 +668,14 @@ fn parse_num(b: &[u8], p: &mut usize) -> Result<Json, JsonError> {
             return Err(err("invalid number", s));
         }
     }
-    let t = match std::str::from_utf8(&b[s..*p]) {
-        Ok(t) => t,
-        Err(_) => return Err(err("invalid number", s)),
+    // the number is ASCII, so it is valid text when the input is
+    let t = if txt.len() == b.len() {
+        &txt[s..*p]
+    } else {
+        match std::str::from_utf8(&b[s..*p]) {
+            Ok(t) => t,
+            Err(_) => return Err(err("invalid number", s)),
+        }
     };
     if !is_float {
         if let Ok(n) = t.parse::<i64>() {
@@ -662,20 +705,26 @@ fn hex4(b: &[u8], p: &mut usize) -> Result<u32, JsonError> {
     *p += 4;
     Ok(v)
 }
-fn parse_str(b: &[u8], p: &mut usize) -> Result<String, JsonError> {
+fn parse_str(b: &[u8], txt: &str, p: &mut usize) -> Result<String, JsonError> {
     if *p >= b.len() || b[*p] != b'"' {
         return Err(err("expected string", *p));
     }
     *p += 1;
     let start = *p;
+    // positions of '"' and '\\' are ASCII, so they are char boundaries of `txt`
+    let valid = txt.len() == b.len();
     // fast path: no escapes
     while *p < b.len() && b[*p] != b'"' && b[*p] != b'\\' {
         *p += 1;
     }
     if *p < b.len() && b[*p] == b'"' {
-        let s = match std::str::from_utf8(&b[start..*p]) {
-            Ok(s) => s.to_string(),
-            Err(_) => String::from_utf8_lossy(&b[start..*p]).into_owned(),
+        let s = if valid {
+            txt[start..*p].to_string()
+        } else {
+            match std::str::from_utf8(&b[start..*p]) {
+                Ok(s) => s.to_string(),
+                Err(_) => String::from_utf8_lossy(&b[start..*p]).into_owned(),
+            }
         };
         *p += 1;
         return Ok(s);
@@ -723,7 +772,14 @@ fn parse_str(b: &[u8], p: &mut usize) -> Result<String, JsonError> {
                     _ => return Err(err("invalid escape", *p - 1)),
                 }
             }
-            c => out.push(c),
+            _ => {
+                // copy the run up to the next quote or backslash at once
+                let s = *p - 1;
+                while *p < b.len() && b[*p] != b'"' && b[*p] != b'\\' {
+                    *p += 1;
+                }
+                out.extend_from_slice(&b[s..*p]);
+            }
         }
     }
     match String::from_utf8(out) {

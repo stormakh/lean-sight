@@ -1,6 +1,7 @@
 //! Blocking HTTP/1.1: a server (one thread per connection), a router with path params, request and response types,
 //! query, form and cookie parsing, gzip, static files, and a small HTTP/1.1 client for plain http.
 pub mod client;
+pub mod gzip;
 pub mod router;
 pub mod server;
 pub mod staticfile;
@@ -116,6 +117,13 @@ pub enum Body {
     File(std::fs::File, u64),
 }
 
+/// Header list with room for the default headers the app and the server add, so they do not grow it again.
+fn content_type_headers(ct: &str) -> Vec<(String, String)> {
+    let mut h = Vec::with_capacity(8);
+    h.push(("Content-Type".to_string(), ct.to_string()));
+    h
+}
+
 #[derive(Debug)]
 pub struct Response {
     pub status: u16,
@@ -129,16 +137,16 @@ impl Response {
     }
     /// `application/json` from a value.
     pub fn json(status: u16, v: &Json) -> Response {
-        let mut s = String::new();
+        let mut s = String::with_capacity(256);
         v.write(&mut s);
         Response::json_text(status, s)
     }
     /// `application/json` from JSON text you already wrote.
     pub fn json_text(status: u16, text: String) -> Response {
-        Response { status, headers: vec![("Content-Type".to_string(), "application/json".to_string())], body: Body::Bytes(text.into_bytes()) }
+        Response { status, headers: content_type_headers("application/json"), body: Body::Bytes(text.into_bytes()) }
     }
     pub fn text(status: u16, content_type: &str, body: impl Into<Vec<u8>>) -> Response {
-        Response { status, headers: vec![("Content-Type".to_string(), content_type.to_string())], body: Body::Bytes(body.into()) }
+        Response { status, headers: content_type_headers(content_type), body: Body::Bytes(body.into()) }
     }
     pub fn html(status: u16, body: String) -> Response {
         Response::text(status, "text/html; charset=UTF-8", body)
