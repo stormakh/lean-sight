@@ -47,6 +47,7 @@ enum Ctx {
 struct ParseState {
     ctx: Ctx,
     after_quote: bool,
+    lx: Lx,
 }
 
 fn advance(st: &mut ParseState, text: &str) {
@@ -80,6 +81,137 @@ fn advance(st: &mut ParseState, text: &str) {
         Some(c) => *c == b'\'' || *c == b'"',
         None => st.after_quote,
     };
+}
+
+/// html/template's comment elision, applied once at parse time: HTML comments are removed; in `<script>`, a `//`
+/// comment is removed up to the line end and a `/* */` comment becomes "\n" (" " when it has no line break); in
+/// `<style>`, a `/* */` comment becomes " ". Quoted JavaScript and CSS strings are kept as they are.
+#[derive(Clone, Copy, PartialEq)]
+enum Lx {
+    Html,
+    HtmlCmt,
+    ScriptTag,
+    StyleTag,
+    Js,
+    JsStr(u8),
+    JsLine,
+    JsBlock(bool),
+    Css,
+    CssStr(u8),
+    CssCmt,
+}
+
+fn starts_ci(b: &[u8], p: &[u8]) -> bool {
+    b.len() >= p.len() && b[..p.len()].eq_ignore_ascii_case(p)
+}
+
+fn strip_comments(lx: &mut Lx, text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        let rest = &b[i..];
+        match *lx {
+            Lx::Html => {
+                if rest.starts_with(b"<!--") {
+                    *lx = Lx::HtmlCmt;
+                    i += 4;
+                    continue;
+                }
+                if starts_ci(rest, b"<script") {
+                    *lx = Lx::ScriptTag;
+                } else if starts_ci(rest, b"<style") {
+                    *lx = Lx::StyleTag;
+                }
+            }
+            Lx::HtmlCmt => {
+                if rest.starts_with(b"-->") {
+                    *lx = Lx::Html;
+                    i += 3;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            Lx::ScriptTag => {
+                if c == b'>' {
+                    *lx = Lx::Js;
+                }
+            }
+            Lx::StyleTag => {
+                if c == b'>' {
+                    *lx = Lx::Css;
+                }
+            }
+            Lx::Js => {
+                if starts_ci(rest, b"</script") {
+                    *lx = Lx::Html;
+                } else if c == b'"' || c == b'\'' || c == b'`' {
+                    *lx = Lx::JsStr(c);
+                } else if rest.starts_with(b"//") {
+                    *lx = Lx::JsLine;
+                    i += 2;
+                    continue;
+                } else if rest.starts_with(b"/*") {
+                    *lx = Lx::JsBlock(false);
+                    i += 2;
+                    continue;
+                }
+            }
+            Lx::JsStr(q) | Lx::CssStr(q) => {
+                if c == b'\\' && i + 1 < b.len() {
+                    out.push(c);
+                    i += 1;
+                } else if c == q {
+                    *lx = if matches!(*lx, Lx::JsStr(_)) { Lx::Js } else { Lx::Css };
+                }
+            }
+            Lx::JsLine => {
+                if c == b'\n' || c == b'\r' {
+                    *lx = Lx::Js;
+                } else {
+                    i += 1;
+                    continue;
+                }
+            }
+            Lx::JsBlock(nl) => {
+                if rest.starts_with(b"*/") {
+                    out.push(if nl { b'\n' } else { b' ' });
+                    *lx = Lx::Js;
+                    i += 2;
+                } else {
+                    *lx = Lx::JsBlock(nl || c == b'\n' || c == b'\r');
+                    i += 1;
+                }
+                continue;
+            }
+            Lx::Css => {
+                if starts_ci(rest, b"</style") {
+                    *lx = Lx::Html;
+                } else if c == b'"' || c == b'\'' {
+                    *lx = Lx::CssStr(c);
+                } else if rest.starts_with(b"/*") {
+                    *lx = Lx::CssCmt;
+                    i += 2;
+                    continue;
+                }
+            }
+            Lx::CssCmt => {
+                if rest.starts_with(b"*/") {
+                    out.push(b' ');
+                    *lx = Lx::Css;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
 }
 
 fn mode_of(st: &ParseState) -> Mode {
@@ -253,6 +385,7 @@ fn parse_nodes(toks: &[Tok], pos: &mut usize, st: &mut ParseState) -> Result<(Ve
         *pos += 1;
         match t {
             Tok::Text(s) => {
+                let s = strip_comments(&mut st.lx, &s);
                 advance(st, &s);
                 nodes.push(Node::Text(s));
             }
@@ -442,7 +575,7 @@ impl Template {
     pub fn parse(src: &str) -> Result<Template, String> {
         let toks = lex(src)?;
         let mut pos = 0;
-        let mut st = ParseState { ctx: Ctx::Html, after_quote: false };
+        let mut st = ParseState { ctx: Ctx::Html, after_quote: false, lx: Lx::Html };
         let (nodes, stop) = parse_nodes(&toks, &mut pos, &mut st)?;
         if !stop.is_empty() {
             return Err(format!("unexpected {stop:?}"));

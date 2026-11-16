@@ -7,26 +7,28 @@ use json::Json;
 pub struct ApiError {
     pub status: u16,
     pub body: Json,
+    /// Written by `web.Context.JSON` (middleware `JsonApiErr`): `application/json; charset=UTF-8` and a final newline.
+    pub web: bool,
 }
 
 impl ApiError {
     /// `response.Error(status, message, nil)`: `{"message": ...}`.
     pub fn new(status: u16, message: &str) -> ApiError {
-        ApiError { status, body: Json::obj().with("message", message) }
+        ApiError { status, body: Json::obj().with("message", message), web: false }
     }
     /// `response.Error(status, message, err)` with a non-nil err: Grafana adds `traceID` (empty here), keys sorted.
     pub fn with_trace(status: u16, message: &str) -> ApiError {
-        ApiError { status, body: Json::obj().with("message", message).with("traceID", "") }
+        ApiError { status, body: Json::obj().with("message", message).with("traceID", ""), web: false }
     }
     /// An errutil error as `response.Err` writes it: `{"message","messageId","statusCode","traceID"}` (Go sorts
     /// the keys when it adds traceID). `message` is the public message, or the status text when empty.
     pub fn errutil(status: u16, message_id: &str, message: &str) -> ApiError {
         let msg = if message.is_empty() { http::reason(status) } else { message };
-        ApiError { status, body: Json::obj().with("message", msg).with("messageId", message_id).with("statusCode", status as i64).with("traceID", "") }
+        ApiError { status, body: Json::obj().with("message", msg).with("messageId", message_id).with("statusCode", status as i64).with("traceID", ""), web: false }
     }
     /// Any JSON body (for example a Kubernetes `Status` object).
     pub fn raw(status: u16, body: Json) -> ApiError {
-        ApiError { status, body }
+        ApiError { status, body, web: false }
     }
     /// 404 `{"message":"Not found"}` (Grafana's NotFoundHandler for /api paths).
     pub fn not_found() -> ApiError {
@@ -47,7 +49,17 @@ impl ApiError {
     pub fn internal(message: &str) -> ApiError {
         ApiError::with_trace(500, if message.is_empty() { "Internal Server Error" } else { message })
     }
+    /// The middleware's `ctx.JsonApiErr(status, message, nil)`: `{"message"}` written by `web.Context.JSON`.
+    pub fn web_json(status: u16, message: &str) -> ApiError {
+        ApiError { status, body: Json::obj().with("message", message), web: true }
+    }
     pub fn to_response(&self) -> Response {
+        if self.web {
+            let mut s = String::new();
+            self.body.write(&mut s);
+            s.push('\n');
+            return Response::text(self.status, "application/json; charset=UTF-8", s);
+        }
         Response::json(self.status, &self.body)
     }
 }

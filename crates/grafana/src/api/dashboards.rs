@@ -496,7 +496,9 @@ fn version_json(app: &App, d: &Dashboard, v: &DashboardVersion, message: &str, c
         .with("parentVersion", v.parent_version)
         .with("restoredFrom", v.restored_from)
         .with("version", v.version)
-        .with("created", local_rfc3339(v.created))
+        // Grafana reads the version from the k8s object: the updatedTimestamp annotation (RFC 3339 in UTC) when the
+        // version has one, which every version after the first has; else creationTimestamp (metav1.Time, local).
+        .with("created", if v.version > 1 { rfc3339(v.created) } else { local_rfc3339(v.created) })
         .with("message", message)
         .with("data", data)
         .with("createdBy", creator)

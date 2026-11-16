@@ -49,6 +49,7 @@ impl App {
         let plugins = crate::plugins::Plugins::load(&cfg);
         let mut routes = Routes::new();
         crate::api::register(&mut routes);
+        crate::api::stubs::init();
         App {
             cfg,
             store,
@@ -100,7 +101,7 @@ impl App {
             Access::Public | Access::Optional | Access::SignedIn => {}
             Access::NoAnonymous => {
                 if user.is_anonymous {
-                    return self.not_authorized(&req, ApiError::unauthorized());
+                    return self.not_authorized(&req, ApiError::web_json(401, "Unauthorized"));
                 }
             }
             Access::Role(r) => {
@@ -142,8 +143,10 @@ impl App {
     }
 
     /// 401 for API paths; a redirect to the login page for pages (middleware notAuthorized).
-    pub fn not_authorized(&self, req: &Request, err: ApiError) -> Response {
+    pub fn not_authorized(&self, req: &Request, mut err: ApiError) -> Response {
         if App::is_api_path(&req.path) {
+            // the middleware writes every auth error with c.JSON (charset and final newline)
+            err.web = true;
             return err.to_response();
         }
         let uri = req.uri();
@@ -159,7 +162,7 @@ impl App {
     /// 403 JSON for API paths; a redirect home for pages (middleware accessForbidden).
     pub fn forbidden(&self, req: &Request) -> Response {
         if App::is_api_path(&req.path) {
-            return ApiError::forbidden().to_response();
+            return ApiError::web_json(403, "Permission denied").to_response();
         }
         Response::redirect(302, &format!("{}/", self.cfg.app_sub_url))
     }

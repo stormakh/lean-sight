@@ -1354,7 +1354,9 @@ fn get_bootdata(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
 fn get_frontend_settings(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     let mut out = String::with_capacity(96 * 1024);
     write_settings(c, &mut out);
-    Ok(Response::json_text(200, out))
+    out.push('\n');
+    // GetFrontendSettings writes with c.JSON (web.Context.JSON)
+    Ok(Response::text(200, "application/json; charset=UTF-8", out))
 }
 
 /// `GET /api/frontend/assets` (GetFrontendAssets): hashes that change when the frontend must reload.

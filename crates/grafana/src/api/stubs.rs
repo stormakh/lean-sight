@@ -107,15 +107,48 @@ fn advisor_checks(_c: &mut Ctx<'_>) -> Result<Response, ApiError> {
     )
 }
 
-/// The check types of Grafana 13.3.1, captured from a real instance (`captured/advisor-checktypes.json`). Their uid,
-/// resourceVersion and times are those of the capture.
+/// The check types of Grafana 13.3.1, captured from a real instance (`captured/advisor-checktypes.json`). Grafana
+/// registers them at startup, so `pub fn init` (called by `App::new`) gives each a new uid, the startup time, and a
+/// resourceVersion of the startup time in microseconds (with the capture's offsets between the objects).
+pub fn init() {
+    checktypes();
+}
+
 fn checktypes() -> &'static (String, Vec<(String, String)>) {
     static CT: OnceLock<(String, Vec<(String, String)>)> = OnceLock::new();
     CT.get_or_init(|| {
-        let list = Json::parse(include_str!("captured/advisor-checktypes.json")).unwrap_or(Json::Null);
-        let mut one = Vec::new();
+        let mut list = Json::parse(include_str!("captured/advisor-checktypes.json")).unwrap_or(Json::Null);
+        let now_ms = crate::util::now_ms();
+        let start_us = now_ms * 1000;
+        let ts = crate::util::rfc3339(now_ms / 1000);
+        let rv_of = |m: &Json| m.str_of("resourceVersion").parse::<i64>().unwrap_or(0);
+        let mut min_rv = i64::MAX;
         if let Some(items) = list.get("items").and_then(|v| v.as_arr()) {
             for it in items.iter() {
+                if let Some(m) = it.get("metadata") {
+                    min_rv = min_rv.min(rv_of(m));
+                }
+            }
+        }
+        let rv = |old: i64| (start_us + old - min_rv).to_string();
+        if let Some(m) = list.get_mut("metadata") {
+            let v = rv(rv_of(m));
+            m.set("resourceVersion", v);
+        }
+        let mut one = Vec::new();
+        if let Some(Json::Arr(items)) = list.get_mut("items") {
+            for it in items.iter_mut() {
+                if let Some(m) = it.get_mut("metadata") {
+                    let v = rv(rv_of(m));
+                    m.set("uid", crate::k8s::uuid_v4());
+                    m.set("resourceVersion", v);
+                    m.set("creationTimestamp", ts.as_str());
+                    if let Some(Json::Arr(mf)) = m.get_mut("managedFields") {
+                        for f in mf.iter_mut() {
+                            f.set("time", ts.as_str());
+                        }
+                    }
+                }
                 let name = it.get("metadata").map(|m| m.str_of("name")).unwrap_or("");
                 one.push((name.to_string(), it.stringify_pretty("  ")));
             }
