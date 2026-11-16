@@ -237,7 +237,7 @@ fn build_static_settings(app: &App) -> Json {
     let cfg = &app.cfg;
     let mut toggles: Vec<String> = crate::api::ofrep::enabled_flags(cfg).to_vec();
     toggles.push("topnav".to_string());
-    toggles.sort();
+    json::sort::sort(&mut toggles);
     toggles.dedup();
     let mut ft = Json::obj();
     let mut placed = false;
@@ -575,7 +575,7 @@ fn write_datasources(c: &Ctx<'_>, out: &mut String) -> String {
         entries.retain(|e| e.0 != p.name);
         entries.push((p.name.clone(), text));
     }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    json::sort::sort_by(&mut entries, |a, b| a.0.cmp(&b.0));
     out.push('{');
     for (i, (name, text)) in entries.iter().enumerate() {
         if i > 0 {
@@ -591,7 +591,7 @@ fn write_datasources(c: &Ctx<'_>, out: &mut String) -> String {
 
 fn sort_obj(j: &mut Json) {
     if let Json::Obj(o) = j {
-        o.sort_by(|a, b| a.0.cmp(&b.0));
+        json::sort::sort_by(o, |a, b| a.0.cmp(&b.0));
     }
 }
 
@@ -846,7 +846,7 @@ fn sort_nav(nodes: &mut Vec<Nav>) {
         let w = if n.sort_weight == 0 { i as i64 + 1 } else { n.sort_weight };
         keyed.push((w, i, n));
     }
-    keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    json::sort::sort_by(&mut keyed, |a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     for (_, _, mut n) in keyed.into_iter() {
         sort_nav(&mut n.children);
         nodes.push(n);
@@ -1358,10 +1358,10 @@ fn get_frontend_assets(c: &mut Ctx<'_>) -> Result<Response, ApiError> {
         };
         let version = hex(&[cfg.build_version.as_str(), cfg.build_commit.as_str()]);
         let mut plugins: Vec<String> = app.plugins.list.iter().map(|p| format!("{}@{}", p.name, p.version)).collect();
-        plugins.sort();
+        json::sort::sort(&mut plugins);
         let pr: Vec<&str> = plugins.iter().map(|s| s.as_str()).collect();
         let mut flags: Vec<String> = crate::api::ofrep::enabled_flags(cfg).to_vec();
-        flags.sort();
+        json::sort::sort(&mut flags);
         let fr: Vec<&str> = flags.iter().map(|s| s.as_str()).collect();
         let a = &app.assets;
         let mut parts: Vec<String> = vec![String::new(), a.str_of("dark").to_string(), a.str_of("light").to_string()];

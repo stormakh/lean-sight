@@ -4,6 +4,7 @@
 //! ids keep every digit. Every other number is `Json::Float` and writes as Go's `encoding/json` writes a float64
 //! (shortest digits that read back the same; exponent form below 1e-6 and from 1e21).
 //! Strings write as Go's `json.Marshal` does: `<`, `>`, `&`, U+2028 and U+2029 are escaped.
+pub mod sort;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Default)]

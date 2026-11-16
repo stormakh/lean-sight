@@ -161,12 +161,12 @@ impl Plugins {
             out.list.push(p);
         }
 
-        panels.sort_by(|a, b| a.0.cmp(&b.0));
-        apps.sort_by(|a, b| a.0.cmp(&b.0));
+        json::sort::sort_by(&mut panels, |a, b| a.0.cmp(&b.0));
+        json::sort::sort_by(&mut apps, |a, b| a.0.cmp(&b.0));
         out.panels_json = ZText::new(&Json::Obj(panels).stringify());
         out.apps_json = ZText::new(&Json::Obj(apps).stringify());
 
-        errors.sort_by(|a, b| a.0.cmp(&b.0));
+        json::sort::sort_by(&mut errors, |a, b| a.0.cmp(&b.0));
         let mut ej = Json::arr();
         for (id, sig) in errors.iter() {
             let (code, msg) = match *sig {
@@ -180,7 +180,7 @@ impl Plugins {
         out.errors_json = tight(ej.stringify());
 
         let mut idx: Vec<usize> = (0..out.list.len()).collect();
-        idx.sort_by(|a, b| out.list[*a].name.cmp(&out.list[*b].name));
+        json::sort::sort_by(&mut idx, |a, b| out.list[*a].name.cmp(&out.list[*b].name));
         out.by_name = idx;
         out
     }
@@ -473,7 +473,7 @@ fn normalize(raw: &Json, id: &str, kind: &str) -> Json {
             }
         }
         if !m.is_empty() {
-            m.sort_by(|a, b| a.0.cmp(&b.0));
+            json::sort::sort_by(&mut m, |a, b| a.0.cmp(&b.0));
             o.set("queryOptions", Json::Obj(m));
         }
     }
@@ -596,7 +596,7 @@ fn norm_route(v: &Json) -> Json {
                         params.push((pk.clone(), Json::Str(pv.as_str().unwrap_or("").to_string())));
                     }
                 }
-                params.sort_by(|a, b| a.0.cmp(&b.0));
+                json::sort::sort_by(&mut params, |a, b| a.0.cmp(&b.0));
                 let params = if fld(t, "params").is_some() { Json::Obj(params) } else { Json::Null };
                 Json::obj().with("url", gstr(t, "url")).with("scopes", gstrs(t, "scopes")).with("params", params)
             }
@@ -695,7 +695,7 @@ fn translations(raw: &Json, id: &str) -> Vec<(String, String)> {
             }
         }
     }
-    m.sort_by(|a, b| a.0.cmp(&b.0));
+    json::sort::sort_by(&mut m, |a, b| a.0.cmp(&b.0));
     m
 }
 
@@ -839,7 +839,7 @@ fn sorted_dirs(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
+    json::sort::sort_by(&mut out, |a, b| a.0.cmp(&b.0));
     out.into_iter().map(|e| e.1).collect()
 }
 

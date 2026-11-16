@@ -128,7 +128,7 @@ pub fn generate_name(prefix: &str) -> String {
 pub fn sort_keys(v: &mut Json) {
     match v {
         Json::Obj(o) => {
-            o.sort_by(|a, b| a.0.cmp(&b.0));
+            json::sort::sort_by(o, |a, b| a.0.cmp(&b.0));
             for e in o.iter_mut() {
                 sort_keys(&mut e.1);
             }
@@ -147,7 +147,7 @@ pub fn fields_of(v: &Json) -> Json {
     let mut out = Json::obj();
     if let Some(o) = v.as_obj() {
         let mut keys: Vec<&(String, Json)> = o.iter().collect();
-        keys.sort_by(|a, b| a.0.cmp(&b.0));
+        json::sort::sort_by(&mut keys, |a, b| a.0.cmp(&b.0));
         for e in keys {
             let child = match &e.1 {
                 Json::Obj(c) if !c.is_empty() => {
