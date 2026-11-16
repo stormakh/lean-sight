@@ -50,34 +50,45 @@ const fn crc_tables() -> [u32; 4096] {
 }
 static CRC: [u32; 4096] = crc_tables();
 
-/// CRC-32 (IEEE 802.3), as gzip and zlib's `crc32()`.
-pub fn crc32(d: &[u8]) -> u32 {
+/// One slicing-by-16 step: the CRC state after the 16 bytes of `b`.
+#[inline(always)]
+fn crc_step16(c: u32, b: &[u8]) -> u32 {
     let t = &CRC;
-    let mut c = 0xffff_ffffu32;
+    let b = &b[..16];
+    let x = c ^ u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    t[15 * 256 + (x & 0xff) as usize]
+        ^ t[14 * 256 + ((x >> 8) & 0xff) as usize]
+        ^ t[13 * 256 + ((x >> 16) & 0xff) as usize]
+        ^ t[12 * 256 + (x >> 24) as usize]
+        ^ t[11 * 256 + b[4] as usize]
+        ^ t[10 * 256 + b[5] as usize]
+        ^ t[9 * 256 + b[6] as usize]
+        ^ t[8 * 256 + b[7] as usize]
+        ^ t[7 * 256 + b[8] as usize]
+        ^ t[6 * 256 + b[9] as usize]
+        ^ t[5 * 256 + b[10] as usize]
+        ^ t[4 * 256 + b[11] as usize]
+        ^ t[3 * 256 + b[12] as usize]
+        ^ t[2 * 256 + b[13] as usize]
+        ^ t[256 + b[14] as usize]
+        ^ t[b[15] as usize]
+}
+
+/// CRC state after `d`, starting from state `c` (no pre or post inversion).
+fn crc_update(mut c: u32, d: &[u8]) -> u32 {
     let mut chunks = d.chunks_exact(16);
     for b in &mut chunks {
-        let x = c ^ u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-        c = t[15 * 256 + (x & 0xff) as usize]
-            ^ t[14 * 256 + ((x >> 8) & 0xff) as usize]
-            ^ t[13 * 256 + ((x >> 16) & 0xff) as usize]
-            ^ t[12 * 256 + (x >> 24) as usize]
-            ^ t[11 * 256 + b[4] as usize]
-            ^ t[10 * 256 + b[5] as usize]
-            ^ t[9 * 256 + b[6] as usize]
-            ^ t[8 * 256 + b[7] as usize]
-            ^ t[7 * 256 + b[8] as usize]
-            ^ t[6 * 256 + b[9] as usize]
-            ^ t[5 * 256 + b[10] as usize]
-            ^ t[4 * 256 + b[11] as usize]
-            ^ t[3 * 256 + b[12] as usize]
-            ^ t[2 * 256 + b[13] as usize]
-            ^ t[256 + b[14] as usize]
-            ^ t[b[15] as usize];
+        c = crc_step16(c, b);
     }
     for b in chunks.remainder() {
-        c = (c >> 8) ^ t[((c ^ *b as u32) & 0xff) as usize];
+        c = (c >> 8) ^ CRC[((c ^ *b as u32) & 0xff) as usize];
     }
-    !c
+    c
+}
+
+/// CRC-32 (IEEE 802.3), as gzip and zlib's `crc32()`.
+pub fn crc32(d: &[u8]) -> u32 {
+    !crc_update(0xffff_ffff, d)
 }
 
 // ---------------- bit writer ----------------
@@ -228,13 +239,16 @@ fn deflate(data: &[u8], out: &mut Vec<u8>) {
             i += l;
             miss = 0;
         } else {
+            bl.lit(data[i]);
+            i += 1;
             // after a long run without a match, hash fewer positions (data that does not compress goes faster)
             miss += 1;
-            let step = 1 + (miss >> 6) as usize;
-            let stop = if i + step < n { i + step } else { n };
-            while i < stop {
-                bl.lit(data[i]);
-                i += 1;
+            if miss >= 64 {
+                let stop = i + (miss >> 6) as usize;
+                while i < stop && i < n {
+                    bl.lit(data[i]);
+                    i += 1;
+                }
             }
         }
         if bl.syms.len() >= BLOCK_SYMS {
@@ -257,29 +271,29 @@ fn build_lengths(freq: &[u32], max_bits: usize, lens: &mut [u8]) {
     for l in lens.iter_mut() {
         *l = 0;
     }
-    // (freq, symbol) of used symbols, sorted by frequency (on the stack: at most 286 symbols)
-    let mut syms = [(0u32, 0u16); 286];
+    // used symbols as `freq << 9 | symbol`, sorted (by frequency, then symbol); a block has fewer than 2^22 symbols
+    let mut keys = [0u32; 286];
     let mut n = 0;
     for (s, f) in freq.iter().enumerate() {
         if *f > 0 {
-            syms[n] = (*f, s as u16);
+            keys[n] = *f << 9 | s as u32;
             n += 1;
         }
     }
     let mut k = 0;
     while n < 2 {
         if freq[k] == 0 {
-            syms[n] = (1, k as u16);
+            keys[n] = 1 << 9 | k as u32;
             n += 1;
         }
         k += 1;
     }
-    let syms = &mut syms[..n];
-    syms.sort_unstable();
+    let keys = &mut keys[..n];
+    keys.sort_unstable();
     // Moffat-Katajainen in-place minimum-redundancy code lengths
     let mut a = [0u32; 286];
-    for (i, s) in syms.iter().enumerate() {
-        a[i] = s.0;
+    for (i, key) in keys.iter().enumerate() {
+        a[i] = key >> 9;
     }
     let a = &mut a[..n];
     a[0] += a[1];
@@ -360,14 +374,14 @@ fn build_lengths(freq: &[u32], max_bits: usize, lens: &mut [u8]) {
     let mut j = 0;
     for l in (1..=max_bits).rev() {
         for _ in 0..count[l] {
-            lens[syms[j].1 as usize] = l as u8;
+            lens[(keys[j] & 511) as usize] = l as u8;
             j += 1;
         }
     }
 }
 
-/// Canonical codes for `lens`, bit-reversed for the LSB-first writer.
-fn build_codes(lens: &[u8], codes: &mut [u16]) {
+/// Canonical codes for `lens`, bit-reversed for the LSB-first writer, as `code | length << 16`.
+fn build_codes(lens: &[u8], codes: &mut [u32]) {
     let mut count = [0u16; 16];
     for l in lens.iter() {
         count[*l as usize] += 1;
@@ -387,7 +401,7 @@ fn build_codes(lens: &[u8], codes: &mut [u16]) {
         }
         let c = next[l];
         next[l] += 1;
-        codes[s] = c.reverse_bits() >> (16 - l);
+        codes[s] = (c.reverse_bits() >> (16 - l)) as u32 | (l as u32) << 16;
     }
 }
 
@@ -411,17 +425,31 @@ fn fixed_lengths() -> ([u8; 286], [u8; 30]) {
     (l, [5u8; 30])
 }
 
-/// Bits of the symbols (with extra bits) under the given lengths.
-fn data_bits(bl: &Block, ll: &[u8], dl: &[u8]) -> u64 {
+/// Bits of the code words for `freq` under `lens`.
+fn code_bits(freq: &[u32], lens: &[u8]) -> u64 {
     let mut b = 0u64;
-    for (s, f) in bl.lfreq.iter().enumerate() {
-        let extra = if s >= 257 { LEN_EXTRA[s - 257] } else { 0 };
-        b += *f as u64 * (ll[s] as u32 + extra) as u64;
-    }
-    for (s, f) in bl.dfreq.iter().enumerate() {
-        b += *f as u64 * (dl[s] as u32 + DIST_EXTRA[s]) as u64;
+    for (f, l) in freq.iter().zip(lens.iter()) {
+        b += *f as u64 * *l as u64;
     }
     b
+}
+
+/// Extra bits of the length and distance symbols (the same for every Huffman table).
+fn extra_bits(bl: &Block) -> u64 {
+    let mut b = 0u64;
+    for (f, e) in bl.lfreq[257..].iter().zip(LEN_EXTRA.iter()) {
+        b += *f as u64 * *e as u64;
+    }
+    for (f, e) in bl.dfreq.iter().zip(DIST_EXTRA.iter()) {
+        b += *f as u64 * *e as u64;
+    }
+    b
+}
+
+/// Bits of the code words under the fixed Huffman table.
+fn fixed_code_bits(bl: &Block) -> u64 {
+    let sum = |a: &[u32]| a.iter().map(|f| *f as u64).sum::<u64>();
+    sum(&bl.lfreq[..144]) * 8 + sum(&bl.lfreq[144..256]) * 9 + sum(&bl.lfreq[256..280]) * 7 + sum(&bl.lfreq[280..]) * 8 + sum(&bl.dfreq) * 5
 }
 
 /// Run-length codes (0..=18 with their extra values) for the code lengths.
@@ -489,7 +517,8 @@ fn flush_block(w: &mut Bits<'_>, bl: &mut Block, data: &[u8], end: usize, last: 
     while hclen > 4 && cll[CL_ORDER[hclen - 1]] == 0 {
         hclen -= 1;
     }
-    let mut dyn_bits = 14 + 3 * hclen as u64 + data_bits(bl, &ll, &dl);
+    let extra = extra_bits(bl);
+    let mut dyn_bits = 14 + 3 * hclen as u64 + code_bits(&bl.lfreq, &ll) + code_bits(&bl.dfreq, &dl) + extra;
     for (c, _) in rle.iter() {
         let extra = match *c {
             16 => 2,
@@ -499,8 +528,7 @@ fn flush_block(w: &mut Bits<'_>, bl: &mut Block, data: &[u8], end: usize, last: 
         };
         dyn_bits += cll[*c as usize] as u64 + extra;
     }
-    let (fl, fd) = fixed_lengths();
-    let fixed_bits = data_bits(bl, &fl, &fd);
+    let fixed_bits = fixed_code_bits(bl) + extra;
     let raw = end - bl.start;
     let stored_bits = (raw as u64 + 5 * (raw as u64 / 65535 + 1)) * 8 + 8;
     let bfinal = last as u32;
@@ -523,6 +551,7 @@ fn flush_block(w: &mut Bits<'_>, bl: &mut Block, data: &[u8], end: usize, last: 
     } else if fixed_bits <= dyn_bits {
         w.put(bfinal, 1);
         w.put(1, 2);
+        let (fl, fd) = fixed_lengths();
         write_syms(w, bl, &fl, &fd);
     } else {
         w.put(bfinal, 1);
@@ -533,12 +562,12 @@ fn flush_block(w: &mut Bits<'_>, bl: &mut Block, data: &[u8], end: usize, last: 
         for k in 0..hclen {
             w.put(cll[CL_ORDER[k]] as u32, 3);
         }
-        let mut clc = [0u16; 19];
+        let mut clc = [0u32; 19];
         build_codes(&cll, &mut clc);
         for (c, x) in rle.iter() {
-            let c = *c as usize;
-            w.put(clc[c] as u32, cll[c] as u32);
-            match c {
+            let code = clc[*c as usize];
+            w.put(code & 0xffff, code >> 16);
+            match *c {
                 16 => w.put(*x as u32, 2),
                 17 => w.put(*x as u32, 3),
                 18 => w.put(*x as u32, 7),
@@ -554,27 +583,31 @@ fn flush_block(w: &mut Bits<'_>, bl: &mut Block, data: &[u8], end: usize, last: 
 }
 
 fn write_syms(w: &mut Bits<'_>, bl: &Block, ll: &[u8], dl: &[u8]) {
-    let mut lc = [0u16; 286];
-    let mut dc = [0u16; 30];
+    let mut lc = [0u32; 286];
+    let mut dc = [0u32; 30];
     build_codes(ll, &mut lc);
     build_codes(dl, &mut dc);
     for s in bl.syms.iter() {
         let s = *s;
         let dist = s >> 9;
         if dist == 0 {
-            w.put(lc[s as usize] as u32, ll[s as usize] as u32);
+            let c = lc[(s & 255) as usize];
+            w.put(c & 0xffff, c >> 16);
         } else {
             let (li, le, lx) = len_code(s & 511);
-            w.put(lc[257 + li] as u32, ll[257 + li] as u32);
+            let c = lc[257 + li];
+            w.put(c & 0xffff, c >> 16);
             if le > 0 {
                 w.put(lx, le);
             }
             let (di, de, dx) = dist_code(dist);
-            w.put(dc[di] as u32, dl[di] as u32);
+            let c = dc[di];
+            w.put(c & 0xffff, c >> 16);
             if de > 0 {
                 w.put(dx, de);
             }
         }
     }
-    w.put(lc[256] as u32, ll[256] as u32);
+    let c = lc[256];
+    w.put(c & 0xffff, c >> 16);
 }

@@ -469,6 +469,20 @@ const fn esc_table() -> [u8; 256] {
 }
 static ESC: [u8; 256] = esc_table();
 
+/// True when any of the 8 bytes in `x` may need escaping (a byte below 0x20, '"', '\\', '<', '>', '&', or any byte
+/// from 0x80). False hits are fine: the caller checks those bytes with `ESC`.
+#[inline(always)]
+fn word_needs_escape(x: u64) -> bool {
+    const LO: u64 = 0x0101_0101_0101_0101;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let has = |c: u8| {
+        let y = x ^ (LO * c as u64);
+        y.wrapping_sub(LO) & !y
+    };
+    let below_space = x.wrapping_sub(LO * 0x20) & !x;
+    ((x | below_space | has(b'"') | has(b'\\') | has(b'<') | has(b'>') | has(b'&')) & HI) != 0
+}
+
 /// Appends `v` as a JSON string literal with Go's escaping.
 pub fn write_str(v: &str, out: &mut String) {
     out.reserve(v.len() + 2);
@@ -476,13 +490,27 @@ pub fn write_str(v: &str, out: &mut String) {
     let b = v.as_bytes();
     let mut start = 0;
     let mut i = 0;
+    // bytes before `slow_end` are checked one by one
+    let mut slow_end = 0;
     while i < b.len() {
-        // runs of plain bytes are copied at once below
-        if ESC[b[i] as usize] == 0 {
+        if i >= slow_end {
+            if i + 8 <= b.len() {
+                let w = &b[i..i + 8];
+                let x = u64::from_le_bytes([w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]]);
+                if !word_needs_escape(x) {
+                    i += 8;
+                    continue;
+                }
+                slow_end = i + 8;
+            } else {
+                slow_end = b.len();
+            }
+        }
+        let c = b[i];
+        if ESC[c as usize] == 0 {
             i += 1;
             continue;
         }
-        let c = b[i];
         let esc: Option<&str> = match c {
             b'"' => Some("\\\""),
             b'\\' => Some("\\\\"),
