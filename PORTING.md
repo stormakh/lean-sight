@@ -9,6 +9,15 @@ This repo is a Rust rewrite of the Grafana 13.3.1 **server**. The web UI is the 
 - At least 30X less CPU per request than default Grafana on the `bench/load.sh` workloads, and 30X less idle CPU.
 - Also report both numbers against the trimmed Grafana (`bench/grafana.sh trimmed`).
 
+Frozen targets (from `bench/results/grafana-default-*`, 2026-11-16, fresh start, whole process tree PSS):
+
+| Metric | Default Grafana | Trimmed Grafana | grafana-rs must reach (vs default) |
+|---|---|---|---|
+| Idle memory | 847 MB (15 procs) | 351 MB (2 procs) | <= 42 MB |
+| Peak memory under `bench/load.sh` | 1063 MB | 545 MB | <= 53 MB |
+| Idle CPU | 0.566% of a core | 0.346% | <= 0.019% |
+| CPU per request: health / search / dashboard / ds_query | 1.25 / 23.6 / 25.9 / 37.8 ms | 1.12 / 23.9 / 25.9 / 37.6 ms | <= 0.042 / 0.79 / 0.86 / 1.26 ms |
+
 ## Scope
 
 In scope: HTTP server and static files, index page with boot data, login and sessions (cookie `grafana_session`, basic auth, API keys/service account tokens), users, orgs, preferences, stars, teams (read only), folders, dashboards (classic v1 JSON, versions), search, data sources (CRUD, health, secure fields), the Prometheus data-source plugin backend in Rust (`/api/ds/query`, resources, health), annotations (store and query), query history, OFREP flags, `/api/health`, `/metrics`.
