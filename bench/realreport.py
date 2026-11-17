@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Builds the side-by-side real-workload report from a bench/realrun.sh output folder.
-usage: realreport.py <run_dir> <out.html>"""
+usage: realreport.py <run_dir> <out.html> [findings.html]  (findings: an HTML fragment shown under "Findings")"""
 import csv, json, sys, statistics, html
 
 run, outp = sys.argv[1], sys.argv[2]
+findings = open(sys.argv[3]).read() if len(sys.argv) > 3 else ""
 ls, le = int(open(f"{run}/load_start").read()), int(open(f"{run}/load_end").read())
 startup = open(f"{run}/startup.txt").read().strip()
 S = {"grafana": [], "grafana-rs": [], "prometheus": []}
@@ -155,6 +156,7 @@ ul{{padding-left:20px}}
 <h2>Memory over time (PSS, MB, log scale)</h2><div class="card"><div class="legend"><span><i style="background:var(--g)"></i>Grafana</span><span><i style="background:var(--r)"></i>grafana-rs</span><span>shaded: load phase</span></div><svg id="mem" viewBox="0 0 900 260"></svg></div>
 <h2>CPU over time (% of one core, 5 s samples, log scale)</h2><div class="card"><svg id="cpu" viewBox="0 0 900 260"></svg></div>
 <h2>Side by side</h2><div class="card wrap"><table><thead><tr><th>Measure</th><th>Grafana</th><th>grafana-rs</th><th>Better by</th></tr></thead><tbody>{''.join(rows_html)}</tbody></table></div>
+{('<h2>Findings</h2><div class="card">' + findings + '</div>') if findings else ''}
 <h2>Correctness and errors</h2><div class="card"><ul>
 <li>Before the run, the 15 panel queries of the dashboard were sent to both servers with the same fixed time window: <b>15 of 15 responses byte-identical</b>.</li>
 <li>Requests: Grafana {g['requests']:,} ({g['bad']} not 2xx: {html.escape(errs(g))}); grafana-rs {x['requests']:,} ({x['bad']} not 2xx: {html.escape(errs(x))}).</li>

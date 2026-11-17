@@ -15,3 +15,11 @@ grafana-rs-final,health,114776,0.034,5,0.34
 grafana-rs-final,search,6828,0.264,6,6.59
 grafana-rs-final,dashboard,12214,0.262,6,2.85
 grafana-rs-final,ds_query,2281,0.852,6,15.82
+grafana-rs-2x-o3,health,158478,0.012,3,0.2
+grafana-rs-2x-o3,search,25500,0.078,4,2.0
+grafana-rs-2x-o3,dashboard,21585,0.164,4,2.71
+grafana-rs-2x-o3,ds_query,1404,0.5,5,38.14
+grafana-rs-2x-b,health,168248,0.014,3,0.21
+grafana-rs-2x-b,search,25119,0.078,3,2.0
+grafana-rs-2x-b,dashboard,28724,0.096,4,2.3
+grafana-rs-2x-b,ds_query,1580,0.522,5,26.93
