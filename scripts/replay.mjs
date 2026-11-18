@@ -7,7 +7,7 @@
 //   default file: tests-data/recordings/ui-tour-v1.jsonl. Several files replay in the order given, sharing ids and cookies.
 //
 // The recordings were made with anonymous Admin access (bench/grafana.sh capture-v1), so start the target the same way:
-//   GF_AUTH_ANONYMOUS_ENABLED=true GF_AUTH_ANONYMOUS_ORG_ROLE=Admin target/release/grafana-rs
+//   GF_AUTH_ANONYMOUS_ENABLED=true GF_AUTH_ANONYMOUS_ORG_ROLE=Admin target/release/lean-sight
 // and seed it like the recording (--seed runs bench/seed.sh <target>): data source prom1, dashboard bench1.
 //
 // A row matches when all of these hold:
